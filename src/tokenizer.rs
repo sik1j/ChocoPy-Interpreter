@@ -1,4 +1,6 @@
-use crate::tokenizer::TokenType::{Bang, BangEqual, Equal, EqualEqual, Greater, GreaterEqual, LeftParen, Less, LessEqual, Minus, Plus, RightParen, Star};
+use std::iter::Peekable;
+use std::str::Chars;
+use crate::tokenizer::TokenType::{Bang, BangEqual, Equal, EqualEqual, Greater, GreaterEqual, LeftParen, Less, LessEqual, Minus, Plus, RightParen, Slash, Star};
 
 #[derive(Debug)]
 enum TokenType {
@@ -38,29 +40,21 @@ impl Token {
     }
 }
 
-pub struct Tokenizer {
-    line: u64,
-}
+pub struct Tokenizer {}
 
 impl Tokenizer {
     pub fn tokenize(source: String) -> Vec<Token> {
-        Tokenizer {
-            line: 0,
-        }.tokenize_inner(source)
+        Tokenizer::tokenize_inner(source)
     }
 
-    fn tokenize_inner(&mut self, source: String) -> Vec<Token> {
+    fn tokenize_inner(source: String) -> Vec<Token> {
+        let mut line = 1;
         let mut chars = source.chars().peekable();
 
         let mut tokens = vec![];
         while let Some(c) = chars.next() {
-            let tok = |token_type: TokenType| { Token { token_type, lexeme: c.to_string(), line: self.line } };
-            let mut equal_type_tok = |one, two| {
-                if let Some('=') = chars.next_if_eq(&'=') {
-                    Token { token_type: two, lexeme: c.to_string() + "=", line: self.line }
-                } else {
-                    Token { token_type: one, lexeme: c.to_string(), line: self.line }
-                }
+            let tok = |token_type: TokenType| {
+                Token { token_type, lexeme: c.to_string(), line }
             };
 
             tokens.push(match c {
@@ -71,16 +65,38 @@ impl Tokenizer {
                 '-' => tok(Minus),
                 '*' => tok(Star),
                 // one or two char
-                '=' => equal_type_tok(Equal, EqualEqual),
-                '!' => equal_type_tok(Bang, BangEqual),
-                '>' => equal_type_tok(Greater, GreaterEqual),
-                '<' => equal_type_tok(Less, LessEqual),
+                '=' => equal_type_tok(&mut chars, c, line, Equal, EqualEqual),
+                '!' => equal_type_tok(&mut chars, c, line, Bang, BangEqual),
+                '>' => equal_type_tok(&mut chars, c, line, Greater, GreaterEqual),
+                '<' => equal_type_tok(&mut chars, c, line, Less, LessEqual),
+                // comments
+                '/' => {
+                    if let Some('/') = chars.peek() {
+                        while let Some(_) = chars.next_if(|x| *x != '\n'){};
+                        continue;
+                    } else {
+                        tok(Slash)
+                    }
+                },
                 // whitespace
-                ' ' => continue,
+                ' ' | '\t' => continue,
+                '\n' => {
+                    line += 1;
+                    continue;
+                }
                 _ => panic!(),
             });
         };
+        return tokens;
 
-        tokens
+        fn equal_type_tok(
+            chars: &mut Peekable<Chars>, c: char, line: u64, one: TokenType, two: TokenType,
+        ) -> Token {
+            if let Some('=') = chars.next_if_eq(&'=') {
+                Token { token_type: two, lexeme: c.to_string() + "=", line }
+            } else {
+                Token { token_type: one, lexeme: c.to_string(), line }
+            }
+        }
     }
 }
