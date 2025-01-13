@@ -1,9 +1,5 @@
-use std::iter::Peekable;
-use std::str::Chars;
-use crate::tokenizer::TokenType::{Bang, BangEqual, Equal, EqualEqual, Greater, GreaterEqual, LeftParen, Less, LessEqual, Minus, Plus, RightParen, Slash, Star};
-
-#[derive(Debug)]
-enum TokenType {
+#[derive(Debug, PartialEq)]
+pub enum TokenType {
     // Single Char
     LeftParen,
     RightParen,
@@ -21,82 +17,123 @@ enum TokenType {
     GreaterEqual,
     // Division Or Comment
     Slash,
+    // Literals
+    Number(f64),
+    String(String),
+    Bool(bool)
 }
 
 #[derive(Debug)]
 pub struct Token {
-    token_type: TokenType,
-    line: u64,
-    lexeme: String,
+    pub token_type: TokenType,
+    pub line: u64,
 }
 
-impl Token {
-    fn new(token_type: TokenType, line: u64, lexeme: String) -> Self {
-        Self {
-            token_type,
-            lexeme,
-            line,
-        }
-    }
-}
 
-pub struct Tokenizer {}
-
-impl Tokenizer {
-    pub fn tokenize(source: String) -> Vec<Token> {
-        Tokenizer::tokenize_inner(source)
-    }
-
-    fn tokenize_inner(source: String) -> Vec<Token> {
-        let mut line = 1;
-        let mut chars = source.chars().peekable();
-
-        let mut tokens = vec![];
-        while let Some(c) = chars.next() {
-            let tok = |token_type: TokenType| {
-                Token { token_type, lexeme: c.to_string(), line }
+pub fn tokenize(source: &str) -> Vec<Token> {
+    fn single_token(source: &str, line: u64) -> Option<(Token, &str, u64)> {
+        fn string(source: &str, line: u64) -> Option<(Token, &str, u64)> {
+            let Some(rest) = source.strip_prefix('"') else {
+                return None;
             };
 
-            tokens.push(match c {
-                // one char
-                '(' => tok(LeftParen),
-                ')' => tok(RightParen),
-                '+' => tok(Plus),
-                '-' => tok(Minus),
-                '*' => tok(Star),
-                // one or two char
-                '=' => equal_type_tok(&mut chars, c, line, Equal, EqualEqual),
-                '!' => equal_type_tok(&mut chars, c, line, Bang, BangEqual),
-                '>' => equal_type_tok(&mut chars, c, line, Greater, GreaterEqual),
-                '<' => equal_type_tok(&mut chars, c, line, Less, LessEqual),
-                // comments
-                '/' => {
-                    if let Some('/') = chars.peek() {
-                        while let Some(_) = chars.next_if(|x| *x != '\n'){};
-                        continue;
-                    } else {
-                        tok(Slash)
-                    }
-                },
-                // whitespace
-                ' ' | '\t' => continue,
-                '\n' => {
-                    line += 1;
+            let mut l = line;
+            for (i, byte) in rest.as_bytes().iter().enumerate() {
+                if byte == &b'\n' {
+                    l += 1;
+                };
+                if byte != &b'"' {
                     continue;
-                }
-                _ => panic!(),
-            });
-        };
-        return tokens;
+                };
 
-        fn equal_type_tok(
-            chars: &mut Peekable<Chars>, c: char, line: u64, one: TokenType, two: TokenType,
-        ) -> Token {
-            if let Some('=') = chars.next_if_eq(&'=') {
-                Token { token_type: two, lexeme: c.to_string() + "=", line }
-            } else {
-                Token { token_type: one, lexeme: c.to_string(), line }
-            }
+                let tok = Token {
+                    token_type: TokenType::String(source[1..=i].to_string()),
+                    line: l,
+                };
+                return Some((tok, &source[i + 2..], l));
+            };
+            panic!("Unterminated string error at line {line}")
         }
+
+        fn number(source: &str, line: u64) -> Option<(Token, &str, u64)> {
+            let make_result = |end| {
+                if source[..end].is_empty() {
+                    return None;
+                };
+
+                Some((
+                    Token {token_type: TokenType::Number(source[..end].parse().unwrap()), line},
+                    &source[end..], line
+                ))
+            };
+
+            let mut end = 0;
+            let bytes = source.as_bytes();
+
+            while let Some(b'0'..=b'9') = bytes.get(end) { end += 1 };
+
+            if let Some(b'.') = bytes.get(end) { end += 1 }
+            else {
+                return make_result(end);
+            };
+
+            while let Some(b'0'..=b'9') = bytes.get(end) { end += 1 };
+
+            make_result(end)
+        }
+
+        fn exact_matches(source: &str, line: u64) -> Option<(Token, &str, u64)> {
+            let lex_type_pairs = vec![
+                ("(", TokenType::LeftParen),
+                (")", TokenType::RightParen),
+                ("+", TokenType::Plus),
+                ("-", TokenType::Minus),
+                ("*", TokenType::Star),
+                ("=", TokenType::Equal),
+                ("==", TokenType::EqualEqual),
+                ("!", TokenType::Bang),
+                ("!=", TokenType::BangEqual),
+                ("<", TokenType::Less),
+                ("<=", TokenType::LessEqual),
+                (">", TokenType::Greater),
+                (">=", TokenType::GreaterEqual),
+                ("/", TokenType::Slash),
+                ("true", TokenType::Bool(true)),
+                ("false", TokenType::Bool(false)),
+            ];
+
+            for (lex, token_type) in lex_type_pairs {
+                let Some(rest) = source.strip_prefix(lex) else {
+                    continue;
+                };
+
+                let token = Token {
+                    token_type,
+                    line,
+                };
+
+                return Some((token, rest, line));
+            };
+            None
+        }
+
+        exact_matches(source, line).or(string(source, line)).or(number(source, line))
     }
+
+    fn tokenize_rec(source: &str, line: u64, mut acc: Vec<Token>) -> Vec<Token> {
+        if source.starts_with(&[' ', '\t']) {
+            return tokenize_rec(&source[1..], line, acc);
+        } else if source.starts_with(&['\n']) {
+            return tokenize_rec(&source[1..], line + 1, acc);
+        }
+
+        let Some((token, rest, line_new)) = single_token(source, line) else {
+            return acc;
+        };
+
+        acc.push(token);
+        tokenize_rec(rest, line_new, acc)
+    }
+
+    tokenize_rec(source, 1, vec![])
 }
