@@ -117,7 +117,9 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             None
         }
 
-        exact_matches(source, line).or(string(source, line)).or(number(source, line))
+        exact_matches(source, line)
+            .or(string(source, line))
+            .or(number(source, line))
     }
 
     fn tokenize_rec(source: &str, line: u64, mut acc: Vec<Token>) -> Vec<Token> {
@@ -125,6 +127,9 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             return tokenize_rec(&source[1..], line, acc);
         } else if source.starts_with(&['\n']) {
             return tokenize_rec(&source[1..], line + 1, acc);
+        } else if source.starts_with("//") {
+            let post_comment = source.trim_start_matches(|c| c != '\n');
+            return tokenize_rec(post_comment, line, acc);
         }
 
         let Some((token, rest, line_new)) = single_token(source, line) else {
