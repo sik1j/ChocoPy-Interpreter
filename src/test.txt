@@ -1,4 +1,4 @@
-   // !!!true (
+   13.4 * 52.3 / 3 * -12 - 3 (
 
     ( )
 + -
@@ -8,3 +8,8 @@
 true
 
 false
+
+Fac(Mul(Lit(Number(13.4)),
+    Div(Lit(Number(52.3)),
+        Mul(Lit(Number(3.0)),
+            Una(NegNum(Lit(Number(12.0))))))))

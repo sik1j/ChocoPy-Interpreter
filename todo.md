@@ -1,0 +1,5 @@
+- [ ] Impl: basic four function arithmetic
+  - [x] tokenizing
+  - [x] parsing
+  - [ ] compile
+  - [ ] virtual machine
