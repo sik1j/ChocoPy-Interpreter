@@ -1,8 +1,10 @@
 /*
 Grammar:
 Expr    ::= Term
-Term    ::= Factor '+' Term | Factor '-' Term | Factor
-Factor  ::= Unary '*' Factor | Unary '/' Factor | Unary
+Term    ::= Factor TerTail
+TerTail ::= '+' Factor TerTail | '*' Factor TerTail | Nil
+Factor  ::= Unary FacTail
+FacTail ::= '*' Unary FacTail | '+' Unary FacTail | Nil
 Unary   ::= '-' Unary | '!' Unary | Literal
 Literal ::= String | Number | Bool
 */
@@ -67,54 +69,79 @@ impl Parse for Unary {
 }
 
 #[derive(Debug)]
-pub enum Factor {
-    Mul(Unary, Box<Factor>),
-    Div(Unary, Box<Factor>),
-    Una(Unary),
-}
-
+pub struct  Factor(Unary, FacTail);
 impl Parse for Factor {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let (left, rest1) = Unary::parse(tokens)?;
-        let op = match rest1[0].token_type {
-            TokenType::Star => Factor::Mul,
-            TokenType::Slash => Factor::Div,
-            _ => return Some((Factor::Una(left), rest1)),
-        };
-        let (right, rest2) = Factor::parse(&rest1[1..])?;
+        let (unary, rest1) = Unary::parse(tokens)?;
+        let (tail, rest2) = FacTail::parse(rest1)?;
 
-        Some((op(left, Box::from(right)), rest2))
+        Some((Factor(unary, tail), rest2))
     }
 }
 
 #[derive(Debug)]
-pub enum Term {
-    Add(Factor, Box<Term>),
-    Sub(Factor, Box<Term>),
-    Fac(Factor),
+pub enum FacTail {
+    Mul(Unary, Box<FacTail>),
+    Div(Unary, Box<FacTail>),
+    Nil
 }
 
+impl Parse for FacTail {
+    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
+        let op = match tokens[0].token_type {
+            TokenType::Star => FacTail::Mul,
+            TokenType::Slash => FacTail::Div,
+            _ => return Some((FacTail::Nil, tokens)),
+        };
+
+        let (right, rest) = Unary::parse(&tokens[1..])?;
+        let (tail, rest2) = FacTail::parse(rest)?;
+
+        Some((op(right, Box::from(tail)), rest2))
+    }
+}
+
+
+#[derive(Debug)]
+pub struct  Term(Factor, TerTail);
 impl Parse for Term {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let (left, rest1) = Factor::parse(tokens)?;
-        let op = match rest1[0].token_type {
-            TokenType::Plus => Term::Add,
-            TokenType::Minus => Term::Sub,
-            _ => return Some((Term::Fac(left), rest1)),
-        };
-        let (right, rest2) = Term::parse(&rest1[1..])?;
+        let (factor, rest1) = Factor::parse(tokens)?;
+        let (tail, rest2) = TerTail::parse(rest1)?;
 
-        Some((op(left, Box::from(right)), rest2))
+        Some((Term(factor, tail), rest2))
+    }
+}
+
+#[derive(Debug)]
+pub enum TerTail {
+    Add(Factor, Box<TerTail>),
+    Sub(Factor, Box<TerTail>),
+    Nil
+}
+
+impl Parse for TerTail {
+    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
+        let op = match tokens[0].token_type {
+            TokenType::Plus => TerTail::Add,
+            TokenType::Minus => TerTail::Sub,
+            _ => return Some((TerTail::Nil, tokens)),
+        };
+
+        let (right, rest) = Factor::parse(&tokens[1..])?;
+        let (tail, rest2) = TerTail::parse(rest)?;
+
+        Some((op(right, Box::from(tail)), rest2))
     }
 }
 
 
 #[derive(Debug)]
-pub struct Expr(pub(crate) Term);
+pub struct Expr(pub Term);
 
 impl Parse for Expr {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        Term::parse(tokens)
-            .map(|(term, rest)| (Expr(term), rest))
+        let (term, rest) = Term::parse(tokens)?;
+        Some((Expr(term), rest))
     }
 }
