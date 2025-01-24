@@ -69,7 +69,7 @@ impl Parse for Unary {
 }
 
 #[derive(Debug)]
-pub struct  Factor(Unary, FacTail);
+pub struct  Factor(pub Unary, pub FacTail);
 impl Parse for Factor {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
         let (unary, rest1) = Unary::parse(tokens)?;
@@ -103,7 +103,7 @@ impl Parse for FacTail {
 
 
 #[derive(Debug)]
-pub struct  Term(Factor, TerTail);
+pub struct  Term(pub Factor, pub TerTail);
 impl Parse for Term {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
         let (factor, rest1) = Factor::parse(tokens)?;
