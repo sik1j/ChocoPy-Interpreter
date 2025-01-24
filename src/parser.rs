@@ -1,12 +1,17 @@
 /*
 Grammar:
-Expr    ::= Term
-Term    ::= Factor TerTail
-TerTail ::= '+' Factor TerTail | '*' Factor TerTail | Nil
-Factor  ::= Unary FacTail
-FacTail ::= '*' Unary FacTail | '+' Unary FacTail | Nil
-Unary   ::= '-' Unary | '!' Unary | Literal
-Literal ::= String | Number | Bool
+Expr      ::= Term
+
+Term      ::= Factor TerTail
+TerTail   ::= '+' Factor TerTail | '*' Factor TerTail | Nil
+
+Factor    ::= Unary FacTail
+FacTail   ::= '*' Unary FacTail | '+' Unary FacTail | Nil
+
+Unary     ::= '-' Unary | '!' Unary | Literal
+
+Literal   ::= String | Number | Bool | Grouping
+Grouping  ::= '(' Literal ')'
 */
 
 use crate::tokenizer::{Token, TokenType};
@@ -25,6 +30,7 @@ pub enum Literal {
     String(String),
     Number(f64),
     Bool(bool),
+    Grouping(Box<Expr>)
 }
 
 impl Parse for Literal {
@@ -33,6 +39,14 @@ impl Parse for Literal {
             TokenType::Number(n) => Literal::Number(n.clone()),
             TokenType::String(s) => Literal::String(s.clone()),
             TokenType::Bool(b) => Literal::Bool(b.clone()),
+            TokenType::LeftParen => {
+                let (expr, rest) = Expr::parse(&tokens[1..])?;
+                if rest.get(0).is_none() || rest.get(0).unwrap().token_type != TokenType::RightParen {
+                    panic!("Error: Expected a closing paren");
+                };
+
+                return Some((Literal::Grouping(Box::from(expr)), &rest[1..]))
+            },
             _ => return None
         };
 

@@ -96,6 +96,7 @@ impl Compile for Literal {
             Literal::String(_) => todo!(),
             Literal::Number(n) => vec![ByteCode::Const(n.clone())],
             Literal::Bool(_) => todo!(),
+            Literal::Grouping(expr) => compile(&**expr)
         }
     }
 }
