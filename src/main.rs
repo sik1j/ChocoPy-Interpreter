@@ -2,10 +2,12 @@ use std::{env, fs};
 use crate::compiler::compile;
 use crate::parser::parse;
 use crate::tokenizer::tokenize;
+use crate::virtual_machine::VirtualMachine;
 
 mod tokenizer;
 mod parser;
 mod compiler;
+mod virtual_machine;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -24,10 +26,13 @@ fn main() -> std::io::Result<()> {
     // }
 
     let t = parse(&tokens);
-    println!("{:?}", t);
+    // println!("{:?}", t);
 
     let bytecode = compile(&t);
-    println!("{:?}", bytecode);
+    // println!("{:?}", bytecode);
+
+    let mut vm = VirtualMachine::new();
+    println!("{:?}", vm.run(&bytecode));
 
 
     Ok(())
