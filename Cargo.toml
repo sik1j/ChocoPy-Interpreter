@@ -2,3 +2,6 @@
 name = "lox_bytecode_interpreter"
 version = "0.1.0"
 edition = "2021"
+[dependencies]
+meval = "0.2.0"
+rand = "0.9.0-beta.3"

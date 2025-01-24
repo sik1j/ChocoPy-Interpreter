@@ -29,7 +29,7 @@ pub enum Literal {
 
 impl Parse for Literal {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let literal = match &tokens[0].token_type {
+        let literal = match &tokens.get(0)?.token_type {
             TokenType::Number(n) => Literal::Number(n.clone()),
             TokenType::String(s) => Literal::String(s.clone()),
             TokenType::Bool(b) => Literal::Bool(b.clone()),
@@ -49,7 +49,7 @@ pub enum Unary {
 
 impl Parse for Unary {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        match &tokens[0].token_type {
+        match &tokens.get(0)?.token_type {
             t @ (TokenType::Minus | TokenType::Bang) =>
                 Unary::parse(&tokens[1..])
                     .map(|(unary, rest)| {
@@ -88,6 +88,10 @@ pub enum FacTail {
 
 impl Parse for FacTail {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
+        if tokens.is_empty() {
+            return Some((FacTail::Nil, tokens))
+        };
+
         let op = match tokens[0].token_type {
             TokenType::Star => FacTail::Mul,
             TokenType::Slash => FacTail::Div,
@@ -122,6 +126,10 @@ pub enum TerTail {
 
 impl Parse for TerTail {
     fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
+        if tokens.is_empty() {
+            return Some((TerTail::Nil, tokens))
+        };
+
         let op = match tokens[0].token_type {
             TokenType::Plus => TerTail::Add,
             TokenType::Minus => TerTail::Sub,
