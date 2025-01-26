@@ -150,7 +150,7 @@ fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
             TokenKind::BangEqual
         }
 
-        ch => panic!("{ch}: Unrecognized character")
+        ch => panic!("{ch:?}: Unrecognized character")
     };
 
     Token { kind }
