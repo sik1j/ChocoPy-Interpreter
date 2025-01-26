@@ -98,6 +98,7 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
             // comments
             '#' => {
                 while let Some(ch) = source.next() {
+                    // todo: impl \r and \r\n line terminations
                     if ch == '\n' { break; };
                 };
                 if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
@@ -109,6 +110,7 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
                 source.next();
                 continue
             }
+            // todo: impl \r and \r\n line terminations
             '\n' => {
                 source.next();
                 if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
