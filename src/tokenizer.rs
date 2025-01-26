@@ -94,13 +94,12 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
             '0'..='9' => integer(&mut source),
             // comments
             '#' => {
-                while let Some(&ch) = source.peek() {
-                    source.next();
+                while let Some(ch) = source.next() {
                     if ch == '\n' {
-                        return tokenize_inner(source);
+                        break;
                     };
                 };
-                return tokens;
+                continue;
             },
             // whitespace
             ' ' => {
