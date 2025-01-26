@@ -86,7 +86,10 @@ pub fn tokenize(source: &str) -> Vec<Token> {
 fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
     let mut tokens = vec![];
 
+    let mut is_logical_line = false;
     while let Some(ch) = source.peek() {
+        if !ch.is_ascii_whitespace() && *ch != '#' { is_logical_line = true; }
+
         let token = match ch {
             // literals
             'A'..='Z' | 'a'..='z' | '_' => identifier(&mut source),
@@ -95,10 +98,10 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
             // comments
             '#' => {
                 while let Some(ch) = source.next() {
-                    if ch == '\n' {
-                        break;
-                    };
+                    if ch == '\n' { break; };
                 };
+                if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
+                is_logical_line = false;
                 continue;
             },
             // whitespace
@@ -106,11 +109,19 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
                 source.next();
                 continue
             }
+            '\n' => {
+                source.next();
+                if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
+                is_logical_line = false;
+                continue
+            }
             _ => tokenize_chars(&mut source)
         };
 
         tokens.push(token);
     };
+
+    if is_logical_line { tokens.push(Token {kind: TokenKind::Newline}); };
 
     tokens
 }
