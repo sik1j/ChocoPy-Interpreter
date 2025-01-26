@@ -1,8 +1,5 @@
 use std::{env, fs};
-use crate::compiler::compile;
-use crate::parser::parse;
-use crate::tokenizer::tokenize;
-use crate::virtual_machine::VirtualMachine;
+use crate::tokenizer::{tokenize, TokenKind};
 
 mod tokenizer;
 mod parser;
@@ -19,21 +16,12 @@ fn main() -> std::io::Result<()> {
 
     let file_path = &args[1];
     let source = fs::read_to_string(file_path)?;
-
-    let tokens = tokenize(&source);
-    // for tok in tokens {
-    //     println!("{:?}", tok);
-    // }
-
-    let t = parse(&tokens);
-    // println!("{:?}", t);
-
-    let bytecode = compile(&t);
-    // println!("{:?}", bytecode);
-
-    let mut vm = VirtualMachine::new();
-    println!("{:?}", vm.run(&bytecode));
-
+    for kind in tokenize(&source).iter().map(|tok| &tok.kind) {
+        print!("{:?} ", kind);
+        if kind == &TokenKind::Newline {
+            println!();
+        }
+    }
 
     Ok(())
 }

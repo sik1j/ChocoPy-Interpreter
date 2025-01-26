@@ -1,7 +1,7 @@
 use std::iter::Peekable;
 use std::str::Chars;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TokenKind {
     Plus,
     Minus,
@@ -71,12 +71,8 @@ pub enum TokenKind {
 
 #[derive(Debug)]
 pub struct Token {
-    kind: TokenKind,
+    pub kind: TokenKind,
     // line: u64
-}
-
-pub struct Tokenizer {
-
 }
 
 pub fn tokenize(source: &str) -> Vec<Token> {
@@ -87,6 +83,9 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
     let mut tokens = vec![];
 
     let mut is_logical_line = false;
+    let mut line_start = true;
+    let mut indentation_stack = vec![0];
+
     while let Some(ch) = source.peek() {
         if !ch.is_ascii_whitespace() && *ch != '#' { is_logical_line = true; }
 
@@ -97,35 +96,80 @@ fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
             '0'..='9' => integer(&mut source),
             // comments
             '#' => {
-                while let Some(ch) = source.next() {
-                    // todo: impl \r and \r\n line terminations
-                    if ch == '\n' { break; };
-                };
-                if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
-                is_logical_line = false;
+                comment(&mut source, &mut tokens, &mut is_logical_line, &mut line_start);
                 continue;
-            },
+            }
             // whitespace
             ' ' => {
-                source.next();
-                continue
+                spaces(&mut source, &mut tokens, &mut line_start, &mut indentation_stack);
+                continue;
             }
-            // todo: impl \r and \r\n line terminations
-            '\n' => {
+            '\t' => panic!("Tabs are not implemented. Please use spaces instead"),
+            '\r' | '\n' => {
+                // line terminators: linux - \n, windows - \r\n, old mac - \r
                 source.next();
+                source.next_if_eq(&'\n');
+
                 if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
                 is_logical_line = false;
-                continue
+
+                line_start = true;
+                continue;
             }
             _ => tokenize_chars(&mut source)
         };
+        line_start = false;
 
         tokens.push(token);
     };
 
-    if is_logical_line { tokens.push(Token {kind: TokenKind::Newline}); };
+    while *indentation_stack.last().unwrap() > 0 {
+        indentation_stack.pop();
+        tokens.push(Token { kind: TokenKind::Dedent });
+    };
+    if is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
+
 
     tokens
+}
+
+fn spaces(source: &mut Peekable<Chars>, tokens: &mut Vec<Token>, line_start: &mut bool, indentation_stack: &mut Vec<i32>) {
+    if !*line_start {
+        source.next();
+        return;
+    };
+
+    let mut indent_level = 0;
+    while let Some(' ') = source.next_if_eq(&' ') { indent_level += 1; };
+
+    if indent_level == *indentation_stack.last().unwrap() { return; };
+
+    if indent_level > *indentation_stack.last().unwrap() {
+        indentation_stack.push(indent_level);
+        tokens.push(Token { kind: TokenKind::Indent });
+        return;
+    };
+
+    if !indentation_stack.contains(&indent_level) { panic!("Unmatched indentation level"); }
+    while indent_level < *indentation_stack.last().unwrap() {
+        indentation_stack.pop();
+        tokens.push(Token { kind: TokenKind::Dedent });
+    };
+}
+
+fn comment(source: &mut Peekable<Chars>, tokens: &mut Vec<Token>, is_logical_line: &mut bool, line_start: &mut bool) {
+    while let Some(ch) = source.next() {
+        // line terminators: linux - \n, windows - \r\n, old mac - \r
+        if ch == '\n' { break; };
+        if ch == '\r' {
+            source.next_if_eq(&'\n');
+            break;
+        }
+    };
+
+    if *is_logical_line { tokens.push(Token { kind: TokenKind::Newline }); };
+    *is_logical_line = false;
+    *line_start = true;
 }
 
 fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
@@ -135,7 +179,6 @@ fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
             kind = kind2;
         }
         kind
-
     }
 
     let kind = match source.next().unwrap() {
@@ -156,7 +199,7 @@ fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
         '/' => {
             let Some('/') = source.next() else { panic!("Chocopy does not support float division") };
             TokenKind::SlashSlash
-        },
+        }
         '!' => {
             let Some('=') = source.next() else { panic!("! is not recognized. Try `not` for boolean negation") };
             TokenKind::BangEqual
@@ -221,14 +264,12 @@ fn string(source: &mut Peekable<Chars>) -> Token {
 
     let mut str = String::new();
     while let Some(ch) = source.next() {
-        if ch == '"' { return Token {kind: TokenKind::String(str)}; }
+        if ch == '"' { return Token { kind: TokenKind::String(str) }; }
         if !matches!(ch as u8, 32..=162) { panic!("Only ASCII 32-126 characters allowed") }
         str.push(ch);
     };
 
     panic!("Unterminated String error")
-
-
 }
 
 fn integer(source: &mut Peekable<Chars>) -> Token {
@@ -242,5 +283,5 @@ fn integer(source: &mut Peekable<Chars>) -> Token {
         panic!("leading zeros in integer literals are not permitted;");
     };
 
-    return Token {kind: TokenKind::Integer(value)}
+    return Token { kind: TokenKind::Integer(value) };
 }
