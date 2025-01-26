@@ -1,144 +1,234 @@
-#[derive(Debug, PartialEq)]
-pub enum TokenType {
-    // Single Char
-    LeftParen,
-    RightParen,
+use std::iter::Peekable;
+use std::str::Chars;
+
+#[derive(Debug)]
+pub enum TokenKind {
     Plus,
     Minus,
     Star,
-    // One or Two Chars
+    SlashSlash,
+    Percent,
+    Less,
+    Greater,
+    LessEqual,
+    GreaterEqual,
     Equal,
     EqualEqual,
-    Bang,
     BangEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    // Division Or Comment
-    Slash,
+    LeftParen,
+    RightParen,
+    LeftBracket,
+    RightBracket,
+    Comma,
+    Colon,
+    Period,
+    Arrow,
+    // whitespace tokens
+    Newline,
+    Indent,
+    Dedent,
     // Literals
-    Number(f64),
+    Identifier(String),
     String(String),
-    Bool(bool)
+    Integer(u32),
+    // Keywords
+    False,
+    None,
+    True,
+    And,
+    As,
+    Assert,
+    Async,
+    Await,
+    Break,
+    Class,
+    Continue,
+    Def,
+    Del,
+    Elif,
+    Else,
+    Except,
+    Finally,
+    For,
+    From,
+    Global,
+    If,
+    Import,
+    In,
+    Is,
+    Lambda,
+    Nonlocal,
+    Not,
+    Or,
+    Pass,
+    Raise,
+    Return,
+    Try,
+    While,
+    With,
+    Yield,
 }
 
 #[derive(Debug)]
 pub struct Token {
-    pub token_type: TokenType,
-    pub line: u64,
+    kind: TokenKind,
+    // line: u64
 }
 
+pub struct Tokenizer {
+
+}
 
 pub fn tokenize(source: &str) -> Vec<Token> {
-    fn single_token(source: &str, line: u64) -> Option<(Token, &str, u64)> {
-        fn string(source: &str, line: u64) -> Option<(Token, &str, u64)> {
-            let Some(rest) = source.strip_prefix('"') else {
-                return None;
-            };
+    tokenize_inner(source.chars().peekable())
+}
 
-            let mut l = line;
-            for (i, byte) in rest.as_bytes().iter().enumerate() {
-                if byte == &b'\n' {
-                    l += 1;
+fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
+    let mut tokens = vec![];
+
+    while let Some(ch) = source.peek() {
+        let token = match ch {
+            // literals
+            'A'..='Z' | 'a'..='z' | '_' => identifier(&mut source),
+            '"' => string(&mut source),
+            '0'..='9' => integer(&mut source),
+            // comments
+            '#' => {
+                while let Some(&ch) = source.peek() {
+                    source.next();
+                    if ch == '\n' {
+                        return tokenize_inner(source);
+                    };
                 };
-                if byte != &b'"' {
-                    continue;
-                };
-
-                let tok = Token {
-                    token_type: TokenType::String(source[1..=i].to_string()),
-                    line: l,
-                };
-                return Some((tok, &source[i + 2..], l));
-            };
-            panic!("Unterminated string error at line {line}")
-        }
-
-        fn number(source: &str, line: u64) -> Option<(Token, &str, u64)> {
-            let make_result = |end| {
-                if source[..end].is_empty() {
-                    return None;
-                };
-
-                Some((
-                    Token {token_type: TokenType::Number(source[..end].parse().unwrap()), line},
-                    &source[end..], line
-                ))
-            };
-
-            let mut end = 0;
-            let bytes = source.as_bytes();
-
-            while let Some(b'0'..=b'9') = bytes.get(end) { end += 1 };
-
-            if let Some(b'.') = bytes.get(end) { end += 1 }
-            else {
-                return make_result(end);
-            };
-
-            while let Some(b'0'..=b'9') = bytes.get(end) { end += 1 };
-
-            make_result(end)
-        }
-
-        fn exact_matches(source: &str, line: u64) -> Option<(Token, &str, u64)> {
-            let lex_type_pairs = vec![
-                ("(", TokenType::LeftParen),
-                (")", TokenType::RightParen),
-                ("+", TokenType::Plus),
-                ("-", TokenType::Minus),
-                ("*", TokenType::Star),
-                ("=", TokenType::Equal),
-                ("==", TokenType::EqualEqual),
-                ("!", TokenType::Bang),
-                ("!=", TokenType::BangEqual),
-                ("<", TokenType::Less),
-                ("<=", TokenType::LessEqual),
-                (">", TokenType::Greater),
-                (">=", TokenType::GreaterEqual),
-                ("/", TokenType::Slash),
-                ("true", TokenType::Bool(true)),
-                ("false", TokenType::Bool(false)),
-            ];
-
-            for (lex, token_type) in lex_type_pairs {
-                let Some(rest) = source.strip_prefix(lex) else {
-                    continue;
-                };
-
-                let token = Token {
-                    token_type,
-                    line,
-                };
-
-                return Some((token, rest, line));
-            };
-            None
-        }
-
-        exact_matches(source, line)
-            .or(string(source, line))
-            .or(number(source, line))
-    }
-
-    fn tokenize_rec(source: &str, line: u64, mut acc: Vec<Token>) -> Vec<Token> {
-        if source.starts_with(&[' ', '\t']) {
-            return tokenize_rec(&source[1..], line, acc);
-        } else if source.starts_with(&['\n']) {
-            return tokenize_rec(&source[1..], line + 1, acc);
-        } else if source.starts_with("//") {
-            let post_comment = source.trim_start_matches(|c| c != '\n');
-            return tokenize_rec(post_comment, line, acc);
-        }
-
-        let Some((token, rest, line_new)) = single_token(source, line) else {
-            return acc;
+                return tokens;
+            },
+            // whitespace
+            ' ' => {
+                source.next();
+                continue
+            }
+            _ => tokenize_chars(&mut source)
         };
 
-        acc.push(token);
-        tokenize_rec(rest, line_new, acc)
+        tokens.push(token);
+    };
+
+    tokens
+}
+
+fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
+    fn either(source: &mut Peekable<Chars>, kind1: TokenKind, if_next: char, kind2: TokenKind) -> TokenKind {
+        let mut kind = kind1;
+        if let Some(_) = source.next_if_eq(&if_next) {
+            kind = kind2;
+        }
+        kind
+
     }
 
-    tokenize_rec(source, 1, vec![])
+    let kind = match source.next().unwrap() {
+        '+' => TokenKind::Plus,
+        '*' => TokenKind::Star,
+        '%' => TokenKind::Percent,
+        '(' => TokenKind::LeftParen,
+        ')' => TokenKind::RightParen,
+        '[' => TokenKind::LeftBracket,
+        ']' => TokenKind::RightBracket,
+        ',' => TokenKind::Comma,
+        ':' => TokenKind::Colon,
+        '.' => TokenKind::Period,
+        '-' => either(source, TokenKind::Minus, '>', TokenKind::Arrow),
+        '<' => either(source, TokenKind::Less, '=', TokenKind::LessEqual),
+        '>' => either(source, TokenKind::Greater, '=', TokenKind::GreaterEqual),
+        '=' => either(source, TokenKind::Equal, '=', TokenKind::EqualEqual),
+        '/' => {
+            let Some('/') = source.next() else { panic!("Chocopy does not support float division") };
+            TokenKind::SlashSlash
+        },
+        '!' => {
+            let Some('=') = source.next() else { panic!("! is not recognized. Try `not` for boolean negation") };
+            TokenKind::BangEqual
+        }
+
+        ch => panic!("{ch}: Unrecognized character")
+    };
+
+    Token { kind }
+}
+
+fn identifier(chars: &mut Peekable<Chars>) -> Token {
+    let mut lex = String::new();
+    while let Some('A'..='Z' | 'a'..='z' | '_' | '0'..='9') = chars.peek() {
+        lex.push(chars.next().unwrap());
+    };
+
+    let token_kind = match lex.as_str() {
+        "False" => TokenKind::False,
+        "none" => TokenKind::None,
+        "True" => TokenKind::True,
+        "and" => TokenKind::And,
+        "as" => TokenKind::As,
+        "assert" => TokenKind::Assert,
+        "async" => TokenKind::Async,
+        "await" => TokenKind::Await,
+        "break" => TokenKind::Break,
+        "class" => TokenKind::Class,
+        "continue" => TokenKind::Continue,
+        "def" => TokenKind::Def,
+        "del" => TokenKind::Del,
+        "elif" => TokenKind::Elif,
+        "else" => TokenKind::Else,
+        "except" => TokenKind::Except,
+        "finally" => TokenKind::Finally,
+        "for" => TokenKind::For,
+        "from" => TokenKind::From,
+        "global" => TokenKind::Global,
+        "if" => TokenKind::If,
+        "import" => TokenKind::Import,
+        "in" => TokenKind::In,
+        "is" => TokenKind::Is,
+        "lambda" => TokenKind::Lambda,
+        "nonlocal" => TokenKind::Nonlocal,
+        "not" => TokenKind::Not,
+        "or" => TokenKind::Or,
+        "pass" => TokenKind::Pass,
+        "raise" => TokenKind::Raise,
+        "return" => TokenKind::Return,
+        "try" => TokenKind::Try,
+        "while" => TokenKind::While,
+        "with" => TokenKind::With,
+        "yield" => TokenKind::Yield,
+        _ => TokenKind::Identifier(lex)
+    };
+
+    Token { kind: token_kind }
+}
+
+fn string(source: &mut Peekable<Chars>) -> Token {
+    source.next();
+
+    let mut str = String::new();
+    while let Some(ch) = source.next() {
+        if ch == '"' { return Token {kind: TokenKind::String(str)}; }
+        if !matches!(ch as u8, 32..=162) { panic!("Only ASCII 32-126 characters allowed") }
+        str.push(ch);
+    };
+
+    panic!("Unterminated String error")
+
+
+}
+
+fn integer(source: &mut Peekable<Chars>) -> Token {
+    let mut lex = String::new();
+    while let Some('0'..='9') = source.peek() {
+        lex.push(source.next().unwrap());
+    };
+
+    let value = lex.parse().unwrap();
+    if value > 0 && lex.starts_with('0') {
+        panic!("leading zeros in integer literals are not permitted;");
+    };
+
+    return Token {kind: TokenKind::Integer(value)}
 }
