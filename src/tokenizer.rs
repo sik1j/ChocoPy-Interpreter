@@ -219,7 +219,7 @@ fn identifier(chars: &mut Peekable<Chars>) -> Token {
 
     let token_kind = match lex.as_str() {
         "False" => TokenKind::False,
-        "none" => TokenKind::None,
+        "None" => TokenKind::None,
         "True" => TokenKind::True,
         "and" => TokenKind::And,
         "as" => TokenKind::As,
