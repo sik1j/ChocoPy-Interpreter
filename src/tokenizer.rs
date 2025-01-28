@@ -1,6 +1,7 @@
-use std::collections::VecDeque;
 use std::iter::Peekable;
 use std::str::Chars;
+
+use crate::parser::Parse;
 
 #[derive(Debug, PartialEq)]
 pub enum TokenKind {
@@ -76,8 +77,66 @@ pub struct Token {
     // line: u64
 }
 
-pub fn tokenize(source: &str) -> VecDeque<Token> {
-    tokenize_inner(source.chars().peekable()).into()
+#[derive(Debug)]
+pub struct Cursor<T> {
+    list: Vec<T>,
+    cursor: usize,
+}
+
+impl<T> Cursor<T> {
+    pub fn new(list: Vec<T>) -> Self {
+        Cursor { list, cursor: 0 }
+    }
+
+    pub fn at_end(&self) -> bool {
+        self.cursor >= self.list.len()
+    }
+
+    pub fn peek(&self) -> Option<&T> {
+        self.list.get(self.cursor)
+    }
+
+    pub fn next(&mut self) -> Option<&T> {
+        if !self.at_end() {
+            self.cursor += 1;
+            return self.list.get(self.cursor - 1);
+        };
+
+        None
+    }
+
+    pub fn next_if<F: Fn(&T) -> bool>(&mut self, f: F) -> Option<&T> {
+        if f(self.peek()?) {
+            return self.next();
+        };
+        None
+    }
+
+    pub fn create_checkpoint(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn set_checkpoint(&mut self, cursor: usize) {
+        self.cursor = cursor;
+    }
+}
+
+impl Cursor<Token> {
+    pub fn parse<T: Parse>(&mut self) -> Option<T> {
+        let checkpoint = self.create_checkpoint();
+        match T::parse(self) {
+            None => {
+                self.set_checkpoint(checkpoint);
+                None
+            }
+            tok => tok,
+        }
+    }
+}
+
+pub fn tokenize(source: &str) -> Cursor<Token> {
+    let list = tokenize_inner(source.chars().peekable());
+    Cursor::new(list)
 }
 
 fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
