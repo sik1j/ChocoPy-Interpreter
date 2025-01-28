@@ -1,169 +1,182 @@
 /*
-Grammar:
-Expr      ::= Term
+Grammar: lit [x], bin_op [x], [expr..=not_op][x]
+literal                   ::= None
+                            | True
+                            | False
+                            | Integer
+                            | IdString | String
 
-Term      ::= Factor TerTail
-TerTail   ::= '+' Factor TerTail | '*' Factor TerTail | Nil
+expr                      ::= or_op [ 'if' or_op 'else' expr ]?
+or_op                     ::= and_op [ 'or' and_op ]*
+and_op                    ::= not_op [ 'and' not_op ]*
+not_op                    ::= [ 'not' ]* cexpr
 
-Factor    ::= Unary FacTail
-FacTail   ::= '*' Unary FacTail | '+' Unary FacTail | Nil
 
-Unary     ::= '-' Unary | '!' Unary | Literal
+cexpr                     ::= IDENTIFIER
+                            | literal
+                            | '[' [ expr [,expr]* ]? ']'
+                            | '(' expr ')'
+                            | member_expr
+                            | index_expr
+                            | member_expr '(' [ expr [,expr]* ]? ')'
+                            | IDENTIFIER '(' [ expr [,expr]* ]? ')'
+                            | cexpr bin_op cexpr
+                            | - cexpr
 
-Literal   ::= String | Number | Bool | Grouping
-Grouping  ::= '(' Literal ')'
+bin_op                    ::= '+' | '-' | '*' | '//' | '%' | '=='
+                            | '!=' | '<=' | '>=' | '<' | '>' | 'is'
+
+member_expr               ::= cexpr . IDENTIFIER
+index_expr                ::= cexpr [ expr ]
+target                    ::= IDENTIFIER
+                            | member_expr
+                            | index_expr
+
 */
 
-use crate::tokenizer::{Token, TokenType};
+use crate::tokenizer::{Cursor, Token, TokenKind};
 
-pub fn parse(tokens: &[Token]) -> Expr {
-    let (t, _) = Expr::parse(tokens).unwrap();
-    t
+pub fn parse(input: &mut Cursor<Token>) -> Vec<Expr> {
+    let mut lits = vec![];
+    while let Some(lit) = input.parse() {
+        lits.push(lit);
+    }
+    lits
 }
 
-trait Parse {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized;
+pub trait Parse: Sized {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self>;
 }
 
 #[derive(Debug)]
 pub enum Literal {
+    None,
+    True,
+    False,
+    Integer(u32),
     String(String),
-    Number(f64),
-    Bool(bool),
-    Grouping(Box<Expr>)
+    IdString(String),
 }
 
 impl Parse for Literal {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let literal = match &tokens.get(0)?.token_type {
-            TokenType::Number(n) => Literal::Number(n.clone()),
-            TokenType::String(s) => Literal::String(s.clone()),
-            TokenType::Bool(b) => Literal::Bool(b.clone()),
-            TokenType::LeftParen => {
-                let (expr, rest) = Expr::parse(&tokens[1..])?;
-                if rest.get(0).is_none() || rest.get(0).unwrap().token_type != TokenType::RightParen {
-                    panic!("Error: Expected a closing paren");
-                };
-
-                return Some((Literal::Grouping(Box::from(expr)), &rest[1..]))
-            },
-            _ => return None
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let lit = match &input.peek()?.kind {
+            TokenKind::None => Literal::None,
+            TokenKind::True => Literal::True,
+            TokenKind::False => Literal::False,
+            TokenKind::Integer(n) => Literal::Integer(*n),
+            TokenKind::String(s) => Literal::String(s.clone()),
+            _ => return None,
         };
+        input.next();
 
-        Some((literal, &tokens[1..]))
+        Some(lit)
     }
 }
 
 #[derive(Debug)]
-pub enum Unary {
-    NegNum(Box<Unary>),
-    NegBool(Box<Unary>),
-    Lit(Literal),
+pub struct Expr {
+    or_op: OrOp,
+    if_expr: Option<(OrOp, Box<Expr>)>,
 }
-
-impl Parse for Unary {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        match &tokens.get(0)?.token_type {
-            t @ (TokenType::Minus | TokenType::Bang) =>
-                Unary::parse(&tokens[1..])
-                    .map(|(unary, rest)| {
-                        let unary_type = match t {
-                            TokenType::Minus => Unary::NegNum,
-                            TokenType::Bang => Unary::NegBool,
-                            _ => unreachable!()
-                        };
-
-                        (unary_type(Box::new(unary)), rest)
-                    }
-                    ),
-            _ => Literal::parse(tokens)
-                .map(|(lit, rest)| (Unary::Lit(lit), rest)),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct  Factor(pub Unary, pub FacTail);
-impl Parse for Factor {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let (unary, rest1) = Unary::parse(tokens)?;
-        let (tail, rest2) = FacTail::parse(rest1)?;
-
-        Some((Factor(unary, tail), rest2))
-    }
-}
-
-#[derive(Debug)]
-pub enum FacTail {
-    Mul(Unary, Box<FacTail>),
-    Div(Unary, Box<FacTail>),
-    Nil
-}
-
-impl Parse for FacTail {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        if tokens.is_empty() {
-            return Some((FacTail::Nil, tokens))
-        };
-
-        let op = match tokens[0].token_type {
-            TokenType::Star => FacTail::Mul,
-            TokenType::Slash => FacTail::Div,
-            _ => return Some((FacTail::Nil, tokens)),
-        };
-
-        let (right, rest) = Unary::parse(&tokens[1..])?;
-        let (tail, rest2) = FacTail::parse(rest)?;
-
-        Some((op(right, Box::from(tail)), rest2))
-    }
-}
-
-
-#[derive(Debug)]
-pub struct  Term(pub Factor, pub TerTail);
-impl Parse for Term {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let (factor, rest1) = Factor::parse(tokens)?;
-        let (tail, rest2) = TerTail::parse(rest1)?;
-
-        Some((Term(factor, tail), rest2))
-    }
-}
-
-#[derive(Debug)]
-pub enum TerTail {
-    Add(Factor, Box<TerTail>),
-    Sub(Factor, Box<TerTail>),
-    Nil
-}
-
-impl Parse for TerTail {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        if tokens.is_empty() {
-            return Some((TerTail::Nil, tokens))
-        };
-
-        let op = match tokens[0].token_type {
-            TokenType::Plus => TerTail::Add,
-            TokenType::Minus => TerTail::Sub,
-            _ => return Some((TerTail::Nil, tokens)),
-        };
-
-        let (right, rest) = Factor::parse(&tokens[1..])?;
-        let (tail, rest2) = TerTail::parse(rest)?;
-
-        Some((op(right, Box::from(tail)), rest2))
-    }
-}
-
-
-#[derive(Debug)]
-pub struct Expr(pub Term);
 
 impl Parse for Expr {
-    fn parse(tokens: &[Token]) -> Option<(Self, &[Token])> where Self: Sized {
-        let (term, rest) = Term::parse(tokens)?;
-        Some((Expr(term), rest))
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let or1 = input.parse()?;
+        if input.next_if(|t| t.kind == TokenKind::If).is_none() {
+            return Expr {
+                or_op: or1,
+                if_expr: None,
+            }
+            .into();
+        }
+
+        let or2 = input.parse()?;
+        input.next_if(|t| t.kind == TokenKind::Else)?;
+        let else_expr = input.parse()?;
+
+        Expr {
+            or_op: or1,
+            if_expr: (or2, Box::new(else_expr)).into(),
+        }
+        .into()
+    }
+}
+
+#[derive(Debug)]
+pub struct OrOp(AndOp, Vec<AndOp>);
+impl Parse for OrOp {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let left = input.parse()?;
+
+        let mut rest = vec![];
+        while input.next_if(|t| t.kind == TokenKind::And).is_some() {
+            rest.push(input.parse()?)
+        }
+
+        Some(OrOp(left, rest))
+    }
+}
+
+#[derive(Debug)]
+pub struct AndOp(NotOp, Vec<NotOp>);
+impl Parse for AndOp {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let left = input.parse()?;
+
+        let mut rest = vec![];
+        while input.next_if(|t| t.kind == TokenKind::And).is_some() {
+            rest.push(input.parse()?)
+        }
+
+        Some(AndOp(left, rest))
+    }
+}
+
+#[derive(Debug)]
+pub enum NotOp {
+    Not(Box<NotOp>),
+    Cexpr(CExpr),
+}
+impl Parse for NotOp {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        if input.next_if(|t| t.kind == TokenKind::Not).is_some() {
+            let rest = Box::new(input.parse()?);
+            return NotOp::Not(rest).into();
+        };
+
+        let cexpr = input.parse()?;
+        NotOp::Cexpr(cexpr).into()
+    }
+}
+
+#[derive(Debug)]
+pub enum CExpr {
+    Literal(Literal),
+}
+impl Parse for CExpr {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        Some(CExpr::Literal(input.parse()?))
+    }
+}
+
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    IntDiv,
+    Mod,
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    Less,
+    Greater,
+    Is,
+}
+impl Parse for BinaryOp {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        todo!()
     }
 }
