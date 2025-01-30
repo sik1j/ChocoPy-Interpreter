@@ -1,38 +1,38 @@
 /*
-Grammar: lit [x], bin_op [x], [expr..=not_op][x]
+Grammar:
+
+expr                      ::= or_op [ 'if' or_op 'else' expr ]?
+or_op                     ::= and_op [ 'or' and_op ]*
+and_op                    ::= not_op [ 'and' not_op ]*
+not_op                    ::= [ 'not' ]* comparison
+
+comparison                ::= term [ [ '==' | '!=' | '<=' | '>=' | '<' | '>' ] term ]*
+term                      ::= factor [ [ '+' | '-' ] factor ]*
+factor                    ::= negation [ [ '*' | '//' | '%' ] negation ]*
+negation                     ::= '-'* accessor
+
+accessor                  ::= base
+                                [ . func_call
+                                | '[' expr ']'
+                                ]*
+
+base                      ::= func_call
+                            | literal
+                            | '[' comma_sep_exprs ']'
+                            | '(' expr ')'
+func_call                 ::= ID [ '(' comma_sep_exprs ')' ]?
+
+comma_sep_exprs           ::= [ expr [ , expr ]* ]?
+
 literal                   ::= None
                             | True
                             | False
                             | Integer
                             | IdString | String
-
-expr                      ::= or_op [ 'if' or_op 'else' expr ]?
-or_op                     ::= and_op [ 'or' and_op ]*
-and_op                    ::= not_op [ 'and' not_op ]*
-not_op                    ::= [ 'not' ]* cexpr
-
-
-cexpr                     ::= IDENTIFIER
-                            | literal
-                            | '[' [ expr [,expr]* ]? ']'
-                            | '(' expr ')'
-                            | member_expr
-                            | index_expr
-                            | member_expr '(' [ expr [,expr]* ]? ')'
-                            | IDENTIFIER '(' [ expr [,expr]* ]? ')'
-                            | cexpr bin_op cexpr
-                            | - cexpr
-
-bin_op                    ::= '+' | '-' | '*' | '//' | '%' | '=='
-                            | '!=' | '<=' | '>=' | '<' | '>' | 'is'
-
-member_expr               ::= cexpr . IDENTIFIER
-index_expr                ::= cexpr [ expr ]
-target                    ::= IDENTIFIER
-                            | member_expr
-                            | index_expr
-
 */
+
+// todo: get rid of the panics and '?' whenever sensible
+use core::panic;
 
 use crate::tokenizer::{Cursor, Token, TokenKind};
 
@@ -104,7 +104,7 @@ impl Parse for Expr {
 }
 
 #[derive(Debug)]
-pub struct OrOp(AndOp, Vec<AndOp>);
+pub struct OrOp(Box<AndOp>, Vec<AndOp>);
 impl Parse for OrOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let left = input.parse()?;
@@ -114,7 +114,7 @@ impl Parse for OrOp {
             rest.push(input.parse()?)
         }
 
-        Some(OrOp(left, rest))
+        Some(OrOp(Box::new(left), rest))
     }
 }
 
@@ -136,7 +136,7 @@ impl Parse for AndOp {
 #[derive(Debug)]
 pub enum NotOp {
     Not(Box<NotOp>),
-    Cexpr(CExpr),
+    Comparison(Comparison),
 }
 impl Parse for NotOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
@@ -145,38 +145,270 @@ impl Parse for NotOp {
             return NotOp::Not(rest).into();
         };
 
-        let cexpr = input.parse()?;
-        NotOp::Cexpr(cexpr).into()
+        let comparison = input.parse()?;
+        NotOp::Comparison(comparison).into()
     }
 }
 
-#[derive(Debug)]
-pub enum CExpr {
-    Literal(Literal),
-}
-impl Parse for CExpr {
-    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
-        Some(CExpr::Literal(input.parse()?))
+fn parse_binary<R, O: Copy, N: Parse>(
+    input: &mut Cursor<Token>,
+    ret_type: fn(N, Vec<(O, N)>) -> R,
+    mapping: &[(TokenKind, O)],
+) -> Option<R> {
+    let left = input.parse()?;
+
+    let mut rest = vec![];
+    loop {
+        let Some(token) = input.peek() else {
+            break;
+        };
+
+        let mut operator = None;
+        for (kind, op_kind) in mapping {
+            if token.kind == *kind {
+                operator = Some(*op_kind);
+                input.next();
+                break;
+            };
+        }
+        if operator.is_none() {
+            break;
+        }
+
+        let right = input
+            .parse()
+            .expect("Expected an argument after binary operator");
+        rest.push((operator.unwrap(), right));
     }
+
+    ret_type(left, rest).into()
 }
 
 #[derive(Debug)]
-pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    IntDiv,
-    Mod,
-    Equal,
+pub struct Comparison(Term, Vec<(ComparisonOp, Term)>);
+#[derive(Debug, Clone, Copy)]
+pub enum ComparisonOp {
+    Equality,
     NotEqual,
-    LessThan,
-    GreaterThan,
     Less,
+    LessEqual,
     Greater,
+    GreaterEqual,
     Is,
 }
-impl Parse for BinaryOp {
+
+impl Parse for Comparison {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
-        todo!()
+        parse_binary(
+            input,
+            Self,
+            &[
+                (TokenKind::EqualEqual, ComparisonOp::Equality),
+                (TokenKind::BangEqual, ComparisonOp::NotEqual),
+                (TokenKind::Less, ComparisonOp::Less),
+                (TokenKind::LessEqual, ComparisonOp::LessEqual),
+                (TokenKind::Greater, ComparisonOp::Greater),
+                (TokenKind::GreaterEqual, ComparisonOp::GreaterEqual),
+                (TokenKind::Is, ComparisonOp::Is),
+            ],
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Term(Factor, Vec<(TermOp, Factor)>);
+#[derive(Debug, Clone, Copy)]
+pub enum TermOp {
+    Add,
+    Subtract,
+}
+impl Parse for Term {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        parse_binary(
+            input,
+            Self,
+            &[
+                (TokenKind::Plus, TermOp::Add),
+                (TokenKind::Minus, TermOp::Subtract),
+            ],
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Factor(Negation, Vec<(FactorOp, Negation)>);
+#[derive(Debug, Clone, Copy)]
+pub enum FactorOp {
+    Multiply,
+    IntDiv,
+    Modulo,
+}
+
+impl Parse for Factor {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        parse_binary(
+            input,
+            Self,
+            &[
+                (TokenKind::Star, FactorOp::Multiply),
+                (TokenKind::SlashSlash, FactorOp::IntDiv),
+                (TokenKind::Percent, FactorOp::Modulo),
+            ],
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Negation {
+    op_count: usize,
+    accessor: Accessor,
+}
+impl Parse for Negation {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let mut op_count = 0;
+        while input.next_if_kind(&TokenKind::Minus).is_some() {
+            op_count += 1;
+        }
+
+        let accessor = input.parse()?;
+        Negation { op_count, accessor }.into()
+    }
+}
+
+#[derive(Debug)]
+pub struct Accessor(Base, Vec<AccessorOp>);
+#[derive(Debug)]
+pub enum AccessorOp {
+    Index(Expr),
+    MemberFunc(FuncCall),
+}
+impl Parse for Accessor {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let left = input.parse()?;
+
+        let mut accessors = vec![];
+        loop {
+            let Some(tok) = input.peek() else {
+                break;
+            };
+
+            match tok.kind {
+                TokenKind::LeftBracket => {
+                    input.next();
+                    let expr = input.parse()?;
+                    input
+                        .next_if_kind(&TokenKind::RightBracket)
+                        .expect("Expected closing ]");
+                    accessors.push(AccessorOp::Index(expr));
+                }
+                TokenKind::Period => {
+                    input.next();
+                    if let Some(func_call) = input.parse() {
+                        accessors.push(AccessorOp::MemberFunc(func_call));
+                    } else {
+                        panic!("Expected an accessor after '.'");
+                    };
+                }
+                _ => break,
+            }
+        }
+
+        Accessor(left, accessors).into()
+    }
+}
+
+#[derive(Debug)]
+pub enum Base {
+    Literal(Literal),
+    Array(CommaSepVals<Expr>),
+    Grouping(Expr),
+    FuncCall(FuncCall),
+}
+
+impl Parse for Base {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        if let Some(func_call) = input.parse() {
+            println!("FuncCall");
+            return Base::FuncCall(func_call).into();
+        };
+
+        if let Some(lit) = input.parse() {
+            println!("Lit");
+            return Base::Literal(lit).into();
+        };
+
+        if input.next_if_kind(&TokenKind::LeftBracket).is_some() {
+            let arr = Base::Array(input.parse()?);
+            input
+                .next_if_kind(&TokenKind::RightBracket)
+                .expect("Expect closing ]");
+            return arr.into();
+        }
+
+        if input.next_if_kind(&TokenKind::LeftParen).is_some() {
+            let grouping = Base::Grouping(input.parse()?);
+            input
+                .next_if_kind(&TokenKind::RightParen)
+                .expect("Expect closing ]");
+            return grouping.into();
+        }
+
+        None
+    }
+}
+
+#[derive(Debug)]
+pub enum FuncCall {
+    FuncCall(Identifier, CommaSepVals<Expr>),
+    Identifer(Identifier),
+}
+
+impl Parse for FuncCall {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        // println!("FuncParse {:?}", input.post_cursor());
+        let iden = input.parse()?;
+        // println!("iden: {:?}, pc: {:?}", iden, input.post_cursor());
+        if input.next_if_kind(&TokenKind::LeftParen).is_none() {
+            return FuncCall::Identifer(iden).into();
+        };
+
+        let args = input.parse()?;
+        println!("args: {:?}, \n\n pc: {:?}", args, input.post_cursor());
+        input
+            .next_if_kind(&TokenKind::RightParen)
+            .expect("Expected a ')'");
+
+        FuncCall::FuncCall(iden, args).into()
+    }
+}
+
+#[derive(Debug)]
+pub struct Identifier(String);
+impl Parse for Identifier {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let res = match &input.peek()?.kind {
+            TokenKind::Identifier(name) => Identifier(name.to_string()).into(),
+            _ => None,
+        };
+        input.next();
+
+        res
+    }
+}
+
+#[derive(Debug)]
+pub struct CommaSepVals<T>(Vec<T>);
+impl<T: Parse> Parse for CommaSepVals<T> {
+    fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let Some(expr) = input.parse() else {
+            return CommaSepVals(vec![]).into();
+        };
+
+        let mut exprs = vec![expr];
+        while input.next_if_kind(&TokenKind::Comma).is_some() {
+            exprs.push(input.parse()?);
+        }
+
+        CommaSepVals(exprs).into()
     }
 }
