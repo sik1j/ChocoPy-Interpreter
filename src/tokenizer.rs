@@ -1,9 +1,10 @@
+use core::panic;
 use std::iter::Peekable;
 use std::str::Chars;
 
 use crate::parser::Parse;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub enum TokenKind {
     Plus,
     Minus,
@@ -59,7 +60,7 @@ pub enum TokenKind {
     In,
     Is,
     Lambda,
-    Nonlocal,
+    NonLocal,
     Not,
     Or,
     Pass,
@@ -81,6 +82,33 @@ pub struct Token {
 pub struct Cursor<T> {
     list: Vec<T>,
     cursor: usize,
+}
+
+#[derive(Debug)]
+pub struct OneOrMore<T> {
+    pub one: T,
+    pub more: Vec<T>,
+}
+
+pub trait IteratorOneOrMoreExt: Iterator + Sized {
+    fn collect_one_or_more(self) -> Option<OneOrMore<Self::Item>> {
+        let mut iter = self;
+        let one = iter.next()?;
+        let more = iter.collect();
+        Some(OneOrMore { one, more })
+    }
+}
+
+impl<I: Iterator> IteratorOneOrMoreExt for I {}
+
+impl<T> IntoIterator for OneOrMore<T> {
+    type Item = T;
+
+    type IntoIter = std::iter::Chain<std::iter::Once<T>, std::vec::IntoIter<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self.one).chain(self.more)
+    }
 }
 
 impl<T> Cursor<T> {
@@ -119,6 +147,10 @@ impl<T> Cursor<T> {
     pub fn set_checkpoint(&mut self, cursor: usize) {
         self.cursor = cursor;
     }
+
+    pub fn post_cursor(&self) -> &[T] {
+        &self.list[self.cursor..]
+    }
 }
 
 impl Cursor<Token> {
@@ -131,6 +163,52 @@ impl Cursor<Token> {
             }
             tok => tok,
         }
+    }
+
+    pub fn parse_one_or_more<T>(
+        &mut self,
+        mut parse_fn: impl FnMut(&mut Self) -> Option<T>,
+    ) -> Option<OneOrMore<T>> {
+        let checkpoint = self.create_checkpoint();
+        let Some(guaranteed) = parse_fn(self) else {
+            self.set_checkpoint(checkpoint);
+            return None;
+        };
+
+        let mut rest = vec![];
+        loop {
+            let checkpoint = self.create_checkpoint();
+            let opt_t = parse_fn(self);
+            match opt_t {
+                Some(t) => rest.push(t),
+                None => {
+                    self.set_checkpoint(checkpoint);
+                    break;
+                }
+            }
+        }
+
+        OneOrMore {
+            one: guaranteed,
+            more: rest,
+        }
+        .into()
+    }
+
+    pub fn parse_zero_or_more<T>(
+        &mut self,
+        parse_fn: impl FnMut(&mut Self) -> Option<T>,
+    ) -> Vec<T> {
+        self.parse_one_or_more(parse_fn)
+            .map_or(vec![], |oom| oom.into_iter().collect::<Vec<_>>())
+    }
+
+    pub fn next_if_kind(&mut self, kind: &TokenKind) -> Option<&Token> {
+        self.next_if(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
+    }
+
+    pub fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> &Token {
+        self.next_if_kind(kind).expect(msg)
     }
 }
 
@@ -359,7 +437,7 @@ fn identifier(chars: &mut Peekable<Chars>) -> Token {
         "in" => TokenKind::In,
         "is" => TokenKind::Is,
         "lambda" => TokenKind::Lambda,
-        "nonlocal" => TokenKind::Nonlocal,
+        "nonlocal" => TokenKind::NonLocal,
         "not" => TokenKind::Not,
         "or" => TokenKind::Or,
         "pass" => TokenKind::Pass,

@@ -8,6 +8,7 @@ mod tokenizer;
 mod virtual_machine;
 
 fn main() -> std::io::Result<()> {
+    env::set_var("RUST_BACKTRACE", "1");
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -17,9 +18,7 @@ fn main() -> std::io::Result<()> {
 
     let file_path = &args[1];
     let source = fs::read_to_string(file_path)?;
-    for node in parse(&mut tokenize(&source)) {
-        println!("{:?}", node)
-    }
+    println!("{:?}", parse(&mut tokenize(&source)));
 
     Ok(())
 }
