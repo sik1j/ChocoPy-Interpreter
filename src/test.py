@@ -1,8 +1,23 @@
-# + - * // % == != <= >= < > is
-# None True 12345 False "walter"
-#
+# Python Program to find the L.C.M. of two input number
 
-# -walter[3][5]
--(12*3) if True else False
+def compute_lcm(x: int, y: int):
 
+   # choose the greater number
+   if x > y:
+       greater = x
+   else:
+       greater = y
 
+   not_found = True
+   while(not_found):
+       if((greater % x == 0) and (greater % y == 0)):
+           lcm = greater
+           not_found = False
+       greater = greater + 1
+
+   return lcm
+
+num1 = 54
+num2 = 24
+
+print("The L.C.M. is", compute_lcm(num1, num2))

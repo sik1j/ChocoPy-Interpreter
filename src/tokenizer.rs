@@ -1,8 +1,9 @@
 use core::panic;
+use std::collections::VecDeque;
 use std::iter::Peekable;
 use std::str::Chars;
 
-use crate::parser::{Cursor, Parse};
+use crate::parser::Cursor;
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub enum TokenKind {
@@ -39,191 +40,161 @@ pub enum TokenKind {
     None,
     True,
     And,
-    As,
-    Assert,
-    Async,
-    Await,
-    Break,
     Class,
-    Continue,
     Def,
-    Del,
     Elif,
     Else,
-    Except,
-    Finally,
     For,
-    From,
     Global,
     If,
-    Import,
     In,
     Is,
-    Lambda,
     NonLocal,
     Not,
     Or,
     Pass,
-    Raise,
     Return,
-    Try,
     While,
-    With,
-    Yield,
 }
 
 #[derive(Debug)]
 pub struct Token {
     pub kind: TokenKind,
-    // line: u64
+    pub line: usize,
 }
 
 pub fn tokenize(source: &str) -> Cursor<Token> {
-    let list = tokenize_inner(source.chars().peekable());
-    Cursor::new(list)
-}
+    let mut physical_lines = vec![String::new()];
 
-fn tokenize_inner(mut source: Peekable<Chars>) -> Vec<Token> {
-    let mut tokens = vec![];
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // \r terminator
+        if ch == '\r' {
+            // \r\n terminator
+            let _ = chars.next_if_eq(&'\n').is_some();
+            physical_lines.push(String::new());
+            continue;
+        };
 
-    let mut is_logical_line = false;
-    let mut line_start = true;
-    let mut indentation_stack = vec![0];
-
-    while let Some(ch) = source.peek() {
-        if !ch.is_ascii_whitespace() && *ch != '#' {
-            is_logical_line = true;
+        // \n terminator
+        if ch == '\n' {
+            physical_lines.push(String::new());
+            continue;
         }
 
+        let line = physical_lines.last_mut().unwrap();
+        line.push(ch);
+    }
+
+    let logical_lines = physical_lines
+        .into_iter()
+        .enumerate()
+        .filter(|(_line_num, line_str)| {
+            let line = line_str.trim();
+            !line.starts_with("#") && !line.is_empty()
+        })
+        .collect::<Vec<_>>();
+
+    let tokenized_lines = logical_lines
+        .into_iter()
+        .map(|(i, line_str)| tokenize_line(i + 1, &line_str))
+        .collect::<Vec<_>>();
+
+    let mut dent_stack = vec![0];
+    let mut tokens = tokenized_lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, (mut line, indent_level))| {
+            let stack_top = *dent_stack.last().unwrap();
+
+            if indent_level == stack_top {
+                return line;
+            }
+
+            if indent_level > stack_top {
+                dent_stack.push(indent_level);
+                line.push_front(Token {
+                    kind: TokenKind::Indent,
+                    line: i + 1,
+                });
+                return line;
+            };
+
+            if !dent_stack.contains(&indent_level) {
+                panic!("Unmatched indentation level");
+            }
+            while indent_level < *dent_stack.last().unwrap() {
+                dent_stack.pop();
+                line.push_front(Token {
+                    kind: TokenKind::Dedent,
+                    line: i + 1,
+                });
+            }
+
+            line
+        })
+        .fold(vec![], |mut acc, line| {
+            acc.append(&mut line.into());
+            acc
+        });
+
+    // dedents for all non-expclityly dedented indents
+    let newline_tok = tokens.pop().unwrap(); // remove newline at end
+    while *dent_stack.last().unwrap() > 0 {
+        dent_stack.pop();
+        tokens.push(Token {
+            kind: TokenKind::Dedent,
+            line: newline_tok.line,
+        });
+    }
+    tokens.push(newline_tok);
+
+    tokens.iter().for_each(|tok| {
+        if tok.kind == TokenKind::Newline {
+            print!("{:?} Line: {:?} \n\n", tok.kind, tok.line);
+        } else {
+            print!("{:?} ", tok.kind)
+        };
+    });
+
+    Cursor::new(tokens)
+}
+
+fn tokenize_line(line_num: usize, line: &str) -> (VecDeque<Token>, usize) {
+    let front_trimmed = line.trim_start_matches(' ');
+    let indent_level = line.len() - front_trimmed.len();
+    let mut source = front_trimmed.chars().peekable();
+
+    let mut tokens = VecDeque::new();
+    while let Some(ch) = source.peek() {
         let token = match ch {
             // literals
-            'A'..='Z' | 'a'..='z' | '_' => identifier(&mut source),
-            '"' => string(&mut source),
-            '0'..='9' => integer(&mut source),
+            'A'..='Z' | 'a'..='z' | '_' => identifier(line_num, &mut source),
+            '"' => string(line_num, &mut source),
+            '0'..='9' => integer(line_num, &mut source),
             // comments
             '#' => {
-                comment(
-                    &mut source,
-                    &mut tokens,
-                    &mut is_logical_line,
-                    &mut line_start,
-                );
-                continue;
+                return (tokens, indent_level);
             }
             // whitespace
             ' ' => {
-                spaces(
-                    &mut source,
-                    &mut tokens,
-                    &mut line_start,
-                    &mut indentation_stack,
-                );
+                let _ = source.next();
                 continue;
             }
             '\t' => panic!("Tabs are not implemented. Please use spaces instead"),
-            '\r' | '\n' => {
-                // line terminators: linux - \n, windows - \r\n, old mac - \r
-                source.next();
-                source.next_if_eq(&'\n');
-
-                if is_logical_line {
-                    tokens.push(Token {
-                        kind: TokenKind::Newline,
-                    });
-                };
-                is_logical_line = false;
-
-                line_start = true;
-                continue;
-            }
-            _ => tokenize_chars(&mut source),
+            _ => tokenize_chars(line_num, &mut source),
         };
-        line_start = false;
 
-        tokens.push(token);
+        tokens.push_back(token);
     }
-
-    while *indentation_stack.last().unwrap() > 0 {
-        indentation_stack.pop();
-        tokens.push(Token {
-            kind: TokenKind::Dedent,
-        });
-    }
-    if is_logical_line {
-        tokens.push(Token {
-            kind: TokenKind::Newline,
-        });
-    };
-
-    tokens
+    tokens.push_back(Token {
+        kind: TokenKind::Newline,
+        line: line_num,
+    });
+    (tokens, indent_level)
 }
 
-fn spaces(
-    source: &mut Peekable<Chars>,
-    tokens: &mut Vec<Token>,
-    line_start: &mut bool,
-    indentation_stack: &mut Vec<i32>,
-) {
-    if !*line_start {
-        source.next();
-        return;
-    };
-
-    let mut indent_level = 0;
-    while let Some(' ') = source.next_if_eq(&' ') {
-        indent_level += 1;
-    }
-
-    if indent_level == *indentation_stack.last().unwrap() {
-        return;
-    };
-
-    if indent_level > *indentation_stack.last().unwrap() {
-        indentation_stack.push(indent_level);
-        tokens.push(Token {
-            kind: TokenKind::Indent,
-        });
-        return;
-    };
-
-    if !indentation_stack.contains(&indent_level) {
-        panic!("Unmatched indentation level");
-    }
-    while indent_level < *indentation_stack.last().unwrap() {
-        indentation_stack.pop();
-        tokens.push(Token {
-            kind: TokenKind::Dedent,
-        });
-    }
-}
-
-fn comment(
-    source: &mut Peekable<Chars>,
-    tokens: &mut Vec<Token>,
-    is_logical_line: &mut bool,
-    line_start: &mut bool,
-) {
-    while let Some(ch) = source.next() {
-        // line terminators: linux - \n, windows - \r\n, old mac - \r
-        if ch == '\n' {
-            break;
-        };
-        if ch == '\r' {
-            source.next_if_eq(&'\n');
-            break;
-        }
-    }
-
-    if *is_logical_line {
-        tokens.push(Token {
-            kind: TokenKind::Newline,
-        });
-    };
-    *is_logical_line = false;
-    *line_start = true;
-}
-
-fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
+fn tokenize_chars(line_num: usize, source: &mut Peekable<Chars>) -> Token {
     fn either(
         source: &mut Peekable<Chars>,
         kind1: TokenKind,
@@ -268,58 +239,56 @@ fn tokenize_chars(source: &mut Peekable<Chars>) -> Token {
         ch => panic!("{ch:?}: Unrecognized character"),
     };
 
-    Token { kind }
+    Token {
+        kind,
+        line: line_num,
+    }
 }
 
-fn identifier(chars: &mut Peekable<Chars>) -> Token {
+fn identifier(line_num: usize, chars: &mut Peekable<Chars>) -> Token {
     let mut lex = String::new();
     while let Some('A'..='Z' | 'a'..='z' | '_' | '0'..='9') = chars.peek() {
         lex.push(chars.next().unwrap());
     }
+
+    match lex.as_str() {
+        "as" | "assert" | "async" | "await" | "break" | "continue" | "del" | "except"
+        | "finally" | "from" | "import" | "lambda" | "raise" | "try" | "with" | "yield" => {
+            panic!("Keyword {} is not supported by Chocopy", lex.as_str())
+        }
+        _ => (),
+    };
 
     let token_kind = match lex.as_str() {
         "False" => TokenKind::False,
         "None" => TokenKind::None,
         "True" => TokenKind::True,
         "and" => TokenKind::And,
-        "as" => TokenKind::As,
-        "assert" => TokenKind::Assert,
-        "async" => TokenKind::Async,
-        "await" => TokenKind::Await,
-        "break" => TokenKind::Break,
         "class" => TokenKind::Class,
-        "continue" => TokenKind::Continue,
         "def" => TokenKind::Def,
-        "del" => TokenKind::Del,
         "elif" => TokenKind::Elif,
         "else" => TokenKind::Else,
-        "except" => TokenKind::Except,
-        "finally" => TokenKind::Finally,
         "for" => TokenKind::For,
-        "from" => TokenKind::From,
         "global" => TokenKind::Global,
         "if" => TokenKind::If,
-        "import" => TokenKind::Import,
         "in" => TokenKind::In,
         "is" => TokenKind::Is,
-        "lambda" => TokenKind::Lambda,
         "nonlocal" => TokenKind::NonLocal,
         "not" => TokenKind::Not,
         "or" => TokenKind::Or,
         "pass" => TokenKind::Pass,
-        "raise" => TokenKind::Raise,
         "return" => TokenKind::Return,
-        "try" => TokenKind::Try,
         "while" => TokenKind::While,
-        "with" => TokenKind::With,
-        "yield" => TokenKind::Yield,
         _ => TokenKind::Identifier(lex),
     };
 
-    Token { kind: token_kind }
+    Token {
+        kind: token_kind,
+        line: line_num,
+    }
 }
 
-fn string(source: &mut Peekable<Chars>) -> Token {
+fn string(line_num: usize, source: &mut Peekable<Chars>) -> Token {
     source.next();
 
     let mut str = String::new();
@@ -327,6 +296,7 @@ fn string(source: &mut Peekable<Chars>) -> Token {
         if ch == '"' {
             return Token {
                 kind: TokenKind::String(str),
+                line: line_num,
             };
         }
         if !matches!(ch as u8, 32..=162) {
@@ -338,7 +308,7 @@ fn string(source: &mut Peekable<Chars>) -> Token {
     panic!("Unterminated String error")
 }
 
-fn integer(source: &mut Peekable<Chars>) -> Token {
+fn integer(line_num: usize, source: &mut Peekable<Chars>) -> Token {
     let mut lex = String::new();
     while let Some('0'..='9') = source.peek() {
         lex.push(source.next().unwrap());
@@ -351,5 +321,6 @@ fn integer(source: &mut Peekable<Chars>) -> Token {
 
     Token {
         kind: TokenKind::Integer(value),
+        line: line_num,
     }
 }
