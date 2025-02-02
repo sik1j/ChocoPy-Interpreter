@@ -23,9 +23,9 @@ statement         ::= simple_statement NEWLINE
                     | 'for' ID 'in' expr : block
 
 simple_statement  ::= 'pass'
+                    | [ target '=' ]+ expr
                     | expr
                     | 'return' [ expr ]?
-                    | [ target '=' ]+ expr
 
 block             ::= NEWLINE INDENT statement+ DEDENT
 
@@ -71,33 +71,6 @@ use crate::tokenizer::{Token, TokenKind};
 pub struct Cursor<T> {
     list: Vec<T>,
     cursor: usize,
-}
-
-#[derive(Debug)]
-pub struct OneOrMore<T> {
-    pub one: T,
-    pub more: Vec<T>,
-}
-
-pub trait IteratorOneOrMoreExt: Iterator + Sized {
-    fn collect_one_or_more(self) -> Option<OneOrMore<Self::Item>> {
-        let mut iter = self;
-        let one = iter.next()?;
-        let more = iter.collect();
-        Some(OneOrMore { one, more })
-    }
-}
-
-impl<I: Iterator> IteratorOneOrMoreExt for I {}
-
-impl<T> IntoIterator for OneOrMore<T> {
-    type Item = T;
-
-    type IntoIter = std::iter::Chain<std::iter::Once<T>, std::vec::IntoIter<T>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::once(self.one).chain(self.more)
-    }
 }
 
 impl<T> Cursor<T> {
@@ -197,13 +170,52 @@ impl Cursor<Token> {
     }
 
     pub fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> &Token {
-        self.next_if_kind(kind).expect(msg)
+        let line = match self.peek() {
+            Some(t) => t.line,
+            None => self.list.last().map_or(0, |t| t.line),
+        };
+        self.next_if_kind(kind)
+            .expect(&format!("[Line: {}] {}", line, msg))
+    }
+
+    pub fn parse_expect<T: Parse>(&mut self, msg: &str) -> T {
+        let line = match self.peek() {
+            Some(t) => t.line,
+            None => self.list.last().map_or(0, |t| t.line),
+        };
+        self.parse().expect(&format!("[Line: {}] {}", line, msg))
+    }
+}
+
+#[derive(Debug)]
+pub struct OneOrMore<T> {
+    pub one: T,
+    pub more: Vec<T>,
+}
+
+pub trait IteratorOneOrMoreExt: Iterator + Sized {
+    fn collect_one_or_more(self) -> Option<OneOrMore<Self::Item>> {
+        let mut iter = self;
+        let one = iter.next()?;
+        let more = iter.collect();
+        Some(OneOrMore { one, more })
+    }
+}
+
+impl<I: Iterator> IteratorOneOrMoreExt for I {}
+
+impl<T> IntoIterator for OneOrMore<T> {
+    type Item = T;
+
+    type IntoIter = std::iter::Chain<std::iter::Once<T>, std::vec::IntoIter<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self.one).chain(self.more)
     }
 }
 
 pub fn parse(input: &mut Cursor<Token>) -> Program {
-    println!("{:?}", input);
-    input.parse().expect("Parser Error")
+    input.parse_expect("Parser Error")
 }
 
 pub trait Parse: Sized {
@@ -212,14 +224,16 @@ pub trait Parse: Sized {
 
 #[derive(Debug)]
 pub struct Program {
-    definitions: Vec<Definition>,
-    statements: Vec<Statement>,
+    pub definitions: Vec<Definition>,
+    pub statements: Vec<Statement>,
 }
 
 impl Parse for Program {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let definitions = input.parse_zero_or_more(Cursor::parse);
         let statements = input.parse_zero_or_more(Cursor::parse);
+
+        println!("stmt.len(): {}\n\n", statements.len());
 
         Program {
             definitions,
@@ -260,16 +274,16 @@ pub struct ClassDef {
 impl Parse for ClassDef {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         input.next_if_kind(&TokenKind::Class)?;
-        let name = input.parse().expect("Expected class name");
+        let name = input.parse_expect("Expected class name");
 
         input.expect_kind(&TokenKind::LeftParen, "Expected opening `(`");
-        let super_class = input.parse().expect("Expected super class name");
+        let super_class = input.parse_expect("Expected super class name");
 
         input.expect_kind(&TokenKind::RightParen, "Expected closing `)`");
         input.expect_kind(&TokenKind::Colon, "Expected `:`");
-        input.expect_kind(&TokenKind::Newline, "Expected Newline");
+        input.expect_kind(&TokenKind::Newline, "Expected newline");
 
-        let body = input.parse().expect("Expected class body");
+        let body = input.parse_expect("Expected class body");
 
         ClassDef {
             name,
@@ -289,7 +303,7 @@ pub enum ClassBody {
 impl Parse for ClassBody {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         if input.next_if_kind(&TokenKind::Pass).is_some() {
-            input.expect_kind(&TokenKind::Newline, "Expected Newline");
+            input.expect_kind(&TokenKind::Newline, "Expected newline");
             return ClassBody::Pass.into();
         };
 
@@ -324,7 +338,7 @@ pub struct FuncDef {
 impl Parse for FuncDef {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         input.next_if_kind(&TokenKind::Def)?;
-        let name = input.parse().expect("Expected a name");
+        let name = input.parse_expect("Expected a name");
         input.expect_kind(&TokenKind::LeftParen, "Expected an opening `(`");
 
         let params = if let Some(param1) = input.parse() {
@@ -337,17 +351,18 @@ impl Parse for FuncDef {
         } else {
             vec![]
         };
+        input.expect_kind(&TokenKind::RightParen, "Expected an opening `(`");
 
         let return_type = input
             .next_if_kind(&TokenKind::Arrow)
             .is_some()
-            .then(|| input.parse::<Type>().expect("Expected a return type"));
+            .then(|| input.parse_expect::<Type>("Expected a return type"));
 
         input.expect_kind(&TokenKind::Colon, "Expected a `:`");
-        input.expect_kind(&TokenKind::Newline, "Expected a Newline");
+        input.expect_kind(&TokenKind::Newline, "Expected a newline");
         input.expect_kind(&TokenKind::Indent, "Expected a Indent");
 
-        let func_body = input.parse().expect("Expected a body");
+        let func_body = input.parse_expect("Expected a body");
         input.expect_kind(&TokenKind::Dedent, "Expected a Dedent");
 
         FuncDef {
@@ -411,19 +426,16 @@ impl Parse for Declaration {
 #[derive(Debug)]
 pub struct TypedVar {
     name: Identifier,
-    var_type: Type,
+    r#type: Type,
 }
 
 impl Parse for TypedVar {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let name = input.parse()?;
-        input.expect_kind(&TokenKind::Colon, "Expected a type");
+        input.next_if_kind(&TokenKind::Colon)?;
+        let r#type = input.parse_expect("Expected a type");
 
-        TypedVar {
-            name,
-            var_type: input.parse()?,
-        }
-        .into()
+        TypedVar { name, r#type }.into()
     }
 }
 
@@ -508,7 +520,10 @@ impl Parse for Statement {
         let colon_msg = "Expected a ':'";
         let body_msg = "Expected a body";
 
+        println!("next for stmt: {:?}", input.peek());
+
         if let Some(simple) = input.parse() {
+            input.expect_kind(&TokenKind::Newline, "Expected a newline");
             return Statement::Simple(simple).into();
         };
 
@@ -518,22 +533,23 @@ impl Parse for Statement {
 
             return Statement::WhileLoop {
                 condition,
-                body: input.parse().expect(&body_msg),
+                body: input.parse_expect(&body_msg),
             }
             .into();
         };
 
         if input.next_if_kind(&TokenKind::For).is_some() {
+            println!("Parsing for-loop");
             let item = input.parse()?;
             input.expect_kind(&TokenKind::In, "Expected a 'in'");
 
-            let iterator = input.parse().expect(&body_msg);
+            let iterator = input.parse_expect(&body_msg);
             input.expect_kind(&TokenKind::Colon, &colon_msg);
 
             return Statement::ForLoop {
                 item,
                 iterator,
-                body: input.parse().expect(&body_msg),
+                body: input.parse_expect(&body_msg),
             }
             .into();
         };
@@ -552,21 +568,21 @@ pub struct IfStmt {
 impl Parse for IfStmt {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let cond_msg = "Expected an expression";
-        let colon_msg = "Expected a ':'";
+        let colon_msg = "Expected a `:`";
         let body_msg = "Expected a body";
 
         input.next_if_kind(&TokenKind::If)?;
-        let if_cond = input.parse().expect(cond_msg);
+        let if_cond = input.parse_expect(cond_msg);
         input.expect_kind(&TokenKind::Colon, colon_msg);
-        let if_body = input.parse().expect(body_msg);
+        let if_body = input.parse_expect(body_msg);
 
         let elifs = input.parse_zero_or_more(|nput| {
             nput.next_if_kind(&TokenKind::Elif)?;
 
-            let cond = nput.parse().expect(&cond_msg);
+            let cond = nput.parse_expect(&cond_msg);
             nput.expect_kind(&TokenKind::Colon, &colon_msg);
 
-            let body = nput.parse().expect(&body_msg);
+            let body = nput.parse_expect(&body_msg);
             (cond, body).into()
         });
 
@@ -583,7 +599,7 @@ impl Parse for IfStmt {
         IfStmt {
             r#if: (if_cond, if_body),
             elifs,
-            r#else: input.parse::<Block>().expect(&body_msg).into(),
+            r#else: input.parse_expect::<Block>(&body_msg).into(),
         }
         .into()
     }
@@ -606,25 +622,28 @@ impl Parse for SimpleStatement {
             return SimpleStatement::Pass.into();
         };
 
-        if let Some(expr) = input.parse() {
-            return SimpleStatement::Expr(expr).into();
-        };
+        let targets = input.parse_one_or_more(|nput| {
+            let target = nput.parse::<Target>()?;
+            nput.next_if_kind(&TokenKind::Equal)?;
+            target.into()
+        });
+
+        println!("{:?}", targets);
+
+        if targets.is_some() {
+            println!("{:?}", input.post_cursor());
+            return SimpleStatement::Assignments {
+                targets: targets?,
+                expr: input.parse_expect("Expected an expression after '='"),
+            }
+            .into();
+        }
 
         if input.next_if_kind(&TokenKind::Return).is_some() {
             return SimpleStatement::Return(input.parse()).into();
         };
 
-        let targets = input.parse_one_or_more(|inpt| {
-            let target = inpt.parse::<Target>()?;
-            inpt.expect_kind(&TokenKind::Equal, "Expected an '='");
-            target.into()
-        })?;
-
-        SimpleStatement::Assignments {
-            targets,
-            expr: input.parse().expect("Expected an expression"),
-        }
-        .into()
+        SimpleStatement::Expr(input.parse()?).into()
     }
 }
 
@@ -690,9 +709,9 @@ impl Parse for Expr {
             .into();
         }
 
-        let or2 = input.parse().expect("Expected an expression");
+        let or2 = input.parse_expect("Expected an expression");
         input.expect_kind(&TokenKind::Else, "Expected `else`");
-        let else_expr = input.parse().expect("Expected an expression");
+        let else_expr = input.parse_expect("Expected an expression");
 
         Expr {
             or_op: or1,
@@ -710,7 +729,7 @@ impl Parse for OrOp {
 
         let mut rest = vec![];
         while input.next_if_kind(&TokenKind::Or).is_some() {
-            rest.push(input.parse().expect("Expected expression after `or`"));
+            rest.push(input.parse_expect("Expected expression after `or`"));
         }
 
         Some(OrOp(Box::new(left), rest))
@@ -725,7 +744,7 @@ impl Parse for AndOp {
 
         let mut rest = vec![];
         while input.next_if_kind(&TokenKind::And).is_some() {
-            rest.push(input.parse().expect("Expected expression after `and`"));
+            rest.push(input.parse_expect("Expected expression after `and`"));
         }
 
         Some(AndOp(left, rest))
@@ -763,7 +782,7 @@ fn parse_binary<R, O: Copy, N: Parse>(
 
     let rest = input.parse_zero_or_more(|nput| {
         let op_type = *tok_to_op.get(&nput.next()?.kind)?;
-        let right = nput.parse().expect("Expected expression");
+        let right = nput.parse_expect("Expected expression after op");
         (op_type, right).into()
     });
 
@@ -880,13 +899,13 @@ pub enum AccessorOp {
 impl Parse for AccessorOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         if input.next_if_kind(&TokenKind::LeftBracket).is_some() {
-            let expr = input.parse().expect("Expected an expression");
+            let expr = input.parse_expect("Expected an expression");
             input.expect_kind(&TokenKind::RightBracket, "Expected a `]`");
             return AccessorOp::Index(expr).into();
         };
 
         if input.next_if_kind(&TokenKind::Period).is_some() {
-            let func_call = input.parse().expect("Expected an member/method");
+            let func_call = input.parse_expect("Expected an member/method");
             return AccessorOp::MemberFunc(func_call).into();
         };
 
@@ -945,6 +964,7 @@ pub enum FuncCall {
 
 impl Parse for FuncCall {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        println!("next for func_call {:?}", input.peek());
         let name = input.parse()?;
 
         if input.next_if_kind(&TokenKind::LeftParen).is_none() {
@@ -961,6 +981,7 @@ impl Parse for FuncCall {
             nput.next_if_kind(&TokenKind::Comma);
             nput.parse::<Expr>()
         }));
+        input.expect_kind(&TokenKind::RightParen, "Expected an closing `)`");
 
         FuncCall::FuncCall { name, args }.into()
     }
@@ -972,6 +993,7 @@ impl Parse for Identifier {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let Some(Token {
             kind: TokenKind::Identifier(name),
+            line: _,
         }) = input.next()
         else {
             return None;

@@ -1,3 +1,5 @@
+use parser::Program;
+
 use crate::parser::parse;
 use crate::tokenizer::tokenize;
 use std::{env, fs};
@@ -18,7 +20,18 @@ fn main() -> std::io::Result<()> {
 
     let file_path = &args[1];
     let source = fs::read_to_string(file_path)?;
-    println!("{:?}", parse(&mut tokenize(&source)));
+    let Program {
+        definitions,
+        statements,
+    } = parse(&mut tokenize(&source));
+
+    for def in definitions {
+        println!("def: {:?}\n\n", def);
+    }
+
+    for stmt in statements {
+        println!("stmt: {:?}\n\n", stmt);
+    }
 
     Ok(())
 }
