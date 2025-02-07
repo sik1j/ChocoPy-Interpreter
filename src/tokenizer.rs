@@ -103,21 +103,22 @@ pub fn tokenize(source: &str) -> Cursor<Token> {
     let mut dent_stack = vec![0];
     let mut tokens = tokenized_lines
         .into_iter()
-        .enumerate()
-        .map(|(i, (mut line, indent_level))| {
+        .map(|(mut tokens_line, indent_level)| {
             let stack_top = *dent_stack.last().unwrap();
 
             if indent_level == stack_top {
-                return line;
+                return tokens_line;
             }
 
             if indent_level > stack_top {
                 dent_stack.push(indent_level);
-                line.push_front(Token {
+
+                let cur_line_num = tokens_line[0].line;
+                tokens_line.push_front(Token {
                     kind: TokenKind::Indent,
-                    line: i + 1,
+                    line: cur_line_num,
                 });
-                return line;
+                return tokens_line;
             };
 
             if !dent_stack.contains(&indent_level) {
@@ -125,13 +126,15 @@ pub fn tokenize(source: &str) -> Cursor<Token> {
             }
             while indent_level < *dent_stack.last().unwrap() {
                 dent_stack.pop();
-                line.push_front(Token {
+
+                let cur_line_num = tokens_line[0].line;
+                tokens_line.push_front(Token {
                     kind: TokenKind::Dedent,
-                    line: i + 1,
+                    line: cur_line_num,
                 });
             }
 
-            line
+            tokens_line
         })
         .fold(vec![], |mut acc, line| {
             acc.append(&mut line.into());
@@ -236,7 +239,7 @@ fn tokenize_chars(line_num: usize, source: &mut Peekable<Chars>) -> Token {
             TokenKind::BangEqual
         }
 
-        ch => panic!("{ch:?}: Unrecognized character"),
+        ch => panic!("{:?}: Unrecognized character", ch),
     };
 
     Token {

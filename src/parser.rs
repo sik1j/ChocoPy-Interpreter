@@ -169,21 +169,26 @@ impl Cursor<Token> {
         self.next_if(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
     }
 
-    pub fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> &Token {
+    pub fn msg_with_line(&self, msg: &str) -> String {
         let line = match self.peek() {
             Some(t) => t.line,
             None => self.list.last().map_or(0, |t| t.line),
         };
+        format!("[Line: {line}] {msg}")
+    }
+
+    pub fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> &Token {
+        let msg = self.msg_with_line(msg);
         self.next_if_kind(kind)
-            .expect(&format!("[Line: {}] {}", line, msg))
+            .expect(&msg)
     }
 
     pub fn parse_expect<T: Parse>(&mut self, msg: &str) -> T {
-        let line = match self.peek() {
-            Some(t) => t.line,
-            None => self.list.last().map_or(0, |t| t.line),
-        };
-        self.parse().expect(&format!("[Line: {}] {}", line, msg))
+        self.parse().expect(&self.msg_with_line(msg))
+    }
+
+    pub fn panic(&self, msg: &str) {
+        panic!("{}", self.msg_with_line(msg))
     }
 }
 
@@ -282,8 +287,10 @@ impl Parse for ClassDef {
         input.expect_kind(&TokenKind::RightParen, "Expected closing `)`");
         input.expect_kind(&TokenKind::Colon, "Expected `:`");
         input.expect_kind(&TokenKind::Newline, "Expected newline");
+        input.expect_kind(&TokenKind::Indent, "Expected an indent after class def");
 
         let body = input.parse_expect("Expected class body");
+        input.expect_kind(&TokenKind::Dedent, "Expected a dedent after class body");
 
         ClassDef {
             name,
@@ -351,7 +358,7 @@ impl Parse for FuncDef {
         } else {
             vec![]
         };
-        input.expect_kind(&TokenKind::RightParen, "Expected an opening `(`");
+        input.expect_kind(&TokenKind::RightParen, "Expected an closing `)`");
 
         let return_type = input
             .next_if_kind(&TokenKind::Arrow)
@@ -359,7 +366,7 @@ impl Parse for FuncDef {
             .then(|| input.parse_expect::<Type>("Expected a return type"));
 
         input.expect_kind(&TokenKind::Colon, "Expected a `:`");
-        input.expect_kind(&TokenKind::Newline, "Expected a newline");
+        input.expect_kind(&TokenKind::Newline, "Expected a newline_1");
         input.expect_kind(&TokenKind::Indent, "Expected a Indent");
 
         let func_body = input.parse_expect("Expected a body");
@@ -441,14 +448,25 @@ impl Parse for TypedVar {
 
 #[derive(Debug)]
 pub enum Type {
-    Identifer(Identifier),
+    Identifier(Identifier),
+    IdString(String),
     Array(Box<Type>),
 }
 
 impl Parse for Type {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        if  input.peek()?.kind == TokenKind::None {
+            input.panic("`None` is not valid. Please omit `-> None` if no return value")
+        }
+
+        if let Some(Token {kind: TokenKind::String(str), .. }) = input.peek() {
+            let str = str.to_string();
+            input.next();
+            return Type::IdString(str).into();
+        }
+
         if let Some(iden) = input.parse() {
-            return Type::Identifer(iden).into();
+            return Type::Identifier(iden).into();
         }
 
         input.next_if_kind(&TokenKind::LeftBracket)?;
@@ -494,8 +512,9 @@ impl Parse for VarDef {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let typed_var = input.parse()?;
         input.next_if_kind(&TokenKind::Equal)?;
-        let value = input.parse()?;
-        input.next_if_kind(&TokenKind::Newline)?;
+
+        let value = input.parse().expect("Expected a literal. Declarations do not support expressions");
+        input.next_if_kind(&TokenKind::Newline).expect("Expected a newline_3. Typed declarations do not support expressions");
 
         VarDef { typed_var, value }.into()
     }
@@ -520,10 +539,8 @@ impl Parse for Statement {
         let colon_msg = "Expected a ':'";
         let body_msg = "Expected a body";
 
-        println!("next for stmt: {:?}", input.peek());
-
         if let Some(simple) = input.parse() {
-            input.expect_kind(&TokenKind::Newline, "Expected a newline");
+            input.expect_kind(&TokenKind::Newline, "Expected a newline_2");
             return Statement::Simple(simple).into();
         };
 
@@ -539,11 +556,11 @@ impl Parse for Statement {
         };
 
         if input.next_if_kind(&TokenKind::For).is_some() {
-            println!("Parsing for-loop");
             let item = input.parse()?;
+
             input.expect_kind(&TokenKind::In, "Expected a 'in'");
 
-            let iterator = input.parse_expect(&body_msg);
+            let iterator = input.parse_expect("Expected an iterator");
             input.expect_kind(&TokenKind::Colon, &colon_msg);
 
             return Statement::ForLoop {
@@ -628,10 +645,8 @@ impl Parse for SimpleStatement {
             target.into()
         });
 
-        println!("{:?}", targets);
 
         if targets.is_some() {
-            println!("{:?}", input.post_cursor());
             return SimpleStatement::Assignments {
                 targets: targets?,
                 expr: input.parse_expect("Expected an expression after '='"),
@@ -943,6 +958,7 @@ impl Parse for Base {
                 nput.parse()
             }));
 
+            input.expect_kind(&TokenKind::RightBracket, "Expected a closing `]`");
             return Base::Array(elems).into();
         };
 
@@ -964,7 +980,6 @@ pub enum FuncCall {
 
 impl Parse for FuncCall {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
-        println!("next for func_call {:?}", input.peek());
         let name = input.parse()?;
 
         if input.next_if_kind(&TokenKind::LeftParen).is_none() {
