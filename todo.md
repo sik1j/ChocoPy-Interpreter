@@ -1,7 +1,18 @@
-- [x] Impl: Chocopy tokenzing
+# Chocopy Compiler
 
-- [x] Impl: basic four function arithmetic
-  - [x] tokenizing
-  - [x] parsing
-  - [x] compile
-  - [x] virtual machine
+## Todo
+
+- [x] impl tokenzing
+- [x] impl parsing
+- [ ] impl typechecking
+- [ ] impl compilation (maybe bytecode first)
+
+
+## Note 10-02-25
+Making head way on implementing the type checking rules.
+
+- [ ] add checking for all the expressions
+- [ ] add checking for statements
+- [ ] need to create new type for multiple scoping
+
+

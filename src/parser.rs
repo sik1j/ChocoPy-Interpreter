@@ -68,6 +68,47 @@ use std::collections::HashMap;
 use crate::tokenizer::{Token, TokenKind};
 
 #[derive(Debug)]
+pub struct Span<T> {
+    pub item: T,
+    pub line: usize,
+}
+impl<T> Span<T> {
+    fn new(item: T, line: usize) -> Self {
+        Self { item, line }
+    }
+}
+
+pub trait GetPosition {
+    fn get_line(&self) -> usize;
+}
+
+macro_rules! expr_tuple_impl_get_pos {
+    ($($name:ty),+) => {
+        $(
+          impl GetPosition for $name {
+              fn get_line(&self) -> usize {
+                  self.0.get_line()
+              }
+          }
+        )*
+    };
+}
+
+expr_tuple_impl_get_pos!(OrOp, AndOp, Comparison, Term, Factor, Accessor);
+
+impl GetPosition for NotOp {
+    fn get_line(&self) -> usize {
+        self.comparison.get_line()
+    }
+}
+
+impl GetPosition for NegInt {
+    fn get_line(&self) -> usize {
+        self.accessor.get_line()
+    }
+}
+
+#[derive(Debug)]
 pub struct Cursor<T> {
     list: Vec<T>,
     cursor: usize,
@@ -179,8 +220,7 @@ impl Cursor<Token> {
 
     pub fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> &Token {
         let msg = self.msg_with_line(msg);
-        self.next_if_kind(kind)
-            .expect(&msg)
+        self.next_if_kind(kind).expect(&msg)
     }
 
     pub fn parse_expect<T: Parse>(&mut self, msg: &str) -> T {
@@ -198,6 +238,12 @@ pub struct OneOrMore<T> {
     pub more: Vec<T>,
 }
 
+impl<T> OneOrMore<T> {
+    pub fn iter(&self) -> std::iter::Chain<std::iter::Once<&T>, std::slice::Iter<'_, T>> {
+        self.into_iter()
+    }
+}
+
 pub trait IteratorOneOrMoreExt: Iterator + Sized {
     fn collect_one_or_more(self) -> Option<OneOrMore<Self::Item>> {
         let mut iter = self;
@@ -208,6 +254,16 @@ pub trait IteratorOneOrMoreExt: Iterator + Sized {
 }
 
 impl<I: Iterator> IteratorOneOrMoreExt for I {}
+
+impl<'a, T: 'a> IntoIterator for &'a OneOrMore<T> {
+    type Item = &'a T;
+
+    type IntoIter = std::iter::Chain<std::iter::Once<&'a T>, std::slice::Iter<'a, T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(&self.one).chain(&self.more)
+    }
+}
 
 impl<T> IntoIterator for OneOrMore<T> {
     type Item = T;
@@ -432,8 +488,8 @@ impl Parse for Declaration {
 
 #[derive(Debug)]
 pub struct TypedVar {
-    name: Identifier,
-    r#type: Type,
+    pub name: Identifier,
+    pub r#type: Type,
 }
 
 impl Parse for TypedVar {
@@ -446,6 +502,12 @@ impl Parse for TypedVar {
     }
 }
 
+impl GetPosition for TypedVar {
+    fn get_line(&self) -> usize {
+        self.name.line
+    }
+}
+
 #[derive(Debug)]
 pub enum Type {
     Identifier(Identifier),
@@ -455,11 +517,15 @@ pub enum Type {
 
 impl Parse for Type {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
-        if  input.peek()?.kind == TokenKind::None {
+        if input.peek()?.kind == TokenKind::None {
             input.panic("`None` is not valid. Please omit `-> None` if no return value")
         }
 
-        if let Some(Token {kind: TokenKind::String(str), .. }) = input.peek() {
+        if let Some(Token {
+            kind: TokenKind::String(str),
+            ..
+        }) = input.peek()
+        {
             let str = str.to_string();
             input.next();
             return Type::IdString(str).into();
@@ -505,18 +571,27 @@ impl Parse for NonLocalDecl {
 
 #[derive(Debug)]
 pub struct VarDef {
-    typed_var: TypedVar,
-    value: Literal,
+    pub typed_var: TypedVar,
+    pub value: Literal,
 }
 impl Parse for VarDef {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let typed_var = input.parse()?;
         input.next_if_kind(&TokenKind::Equal)?;
 
-        let value = input.parse().expect("Expected a literal. Declarations do not support expressions");
-        input.next_if_kind(&TokenKind::Newline).expect("Expected a newline_3. Typed declarations do not support expressions");
+        let value = input
+            .parse()
+            .expect("Expected a literal. Declarations do not support expressions");
+        input
+            .next_if_kind(&TokenKind::Newline)
+            .expect("Expected a newline_3. Typed declarations do not support expressions");
 
         VarDef { typed_var, value }.into()
+    }
+}
+impl GetPosition for VarDef {
+    fn get_line(&self) -> usize {
+        self.typed_var.get_line()
     }
 }
 
@@ -645,7 +720,6 @@ impl Parse for SimpleStatement {
             target.into()
         });
 
-
         if targets.is_some() {
             return SimpleStatement::Assignments {
                 targets: targets?,
@@ -709,8 +783,13 @@ impl Parse for Literal {
 
 #[derive(Debug)]
 pub struct Expr {
-    or_op: OrOp,
-    if_expr: Option<(OrOp, Box<Expr>)>,
+    pub or_op: OrOp,
+    pub if_expr: Option<(OrOp, Box<Expr>)>,
+}
+impl GetPosition for Expr {
+    fn get_line(&self) -> usize {
+        self.or_op.get_line()
+    }
 }
 
 impl Parse for Expr {
@@ -737,13 +816,14 @@ impl Parse for Expr {
 }
 
 #[derive(Debug)]
-pub struct OrOp(Box<AndOp>, Vec<AndOp>);
+pub struct OrOp(pub Box<AndOp>, pub Vec<AndOp>);
+
 impl Parse for OrOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let left = input.parse()?;
 
         let mut rest = vec![];
-        while input.next_if_kind(&TokenKind::Or).is_some() {
+        while let Some(Token { kind: _, line }) = input.next_if_kind(&TokenKind::Or) {
             rest.push(input.parse_expect("Expected expression after `or`"));
         }
 
@@ -752,7 +832,7 @@ impl Parse for OrOp {
 }
 
 #[derive(Debug)]
-pub struct AndOp(NotOp, Vec<NotOp>);
+pub struct AndOp(pub NotOp, pub Vec<NotOp>);
 impl Parse for AndOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let left = input.parse()?;
@@ -768,8 +848,8 @@ impl Parse for AndOp {
 
 #[derive(Debug)]
 pub struct NotOp {
-    op_count: usize,
-    comparison: Comparison,
+    pub op_count: usize,
+    pub comparison: Comparison,
 }
 
 impl Parse for NotOp {
@@ -805,10 +885,10 @@ fn parse_binary<R, O: Copy, N: Parse>(
 }
 
 #[derive(Debug)]
-pub struct Comparison(Term, Vec<(ComparisonOp, Term)>);
-#[derive(Debug, Clone, Copy)]
+pub struct Comparison(pub Term, pub Vec<(ComparisonOp, Term)>);
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComparisonOp {
-    Equality,
+    Equal,
     NotEqual,
     Less,
     LessEqual,
@@ -817,13 +897,15 @@ pub enum ComparisonOp {
     Is,
 }
 
+// todo: comparions should be non-assocciative
+// unlike python3, x < y < z is not valid
 impl Parse for Comparison {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         parse_binary(
             input,
             Self,
             HashMap::from([
-                (TokenKind::EqualEqual, ComparisonOp::Equality),
+                (TokenKind::EqualEqual, ComparisonOp::Equal),
                 (TokenKind::BangEqual, ComparisonOp::NotEqual),
                 (TokenKind::Less, ComparisonOp::Less),
                 (TokenKind::LessEqual, ComparisonOp::LessEqual),
@@ -836,8 +918,8 @@ impl Parse for Comparison {
 }
 
 #[derive(Debug)]
-pub struct Term(Factor, Vec<(TermOp, Factor)>);
-#[derive(Debug, Clone, Copy)]
+pub struct Term(pub Factor, pub Vec<(TermOp, Factor)>);
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TermOp {
     Add,
     Subtract,
@@ -856,8 +938,8 @@ impl Parse for Term {
 }
 
 #[derive(Debug)]
-pub struct Factor(NegInt, Vec<(FactorOp, NegInt)>);
-#[derive(Debug, Clone, Copy)]
+pub struct Factor(pub NegInt, pub Vec<(FactorOp, NegInt)>);
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FactorOp {
     Multiply,
     IntDiv,
@@ -880,8 +962,8 @@ impl Parse for Factor {
 
 #[derive(Debug)]
 pub struct NegInt {
-    op_count: usize,
-    accessor: Accessor,
+    pub op_count: usize,
+    pub accessor: Accessor,
 }
 impl Parse for NegInt {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
@@ -896,13 +978,23 @@ impl Parse for NegInt {
 }
 
 #[derive(Debug)]
-pub struct Accessor(Base, Vec<AccessorOp>);
+pub enum Accessor {
+    Base(Base),
+    Accessors(Base, OneOrMore<AccessorOp>),
+}
+
 impl Parse for Accessor {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let base = input.parse()?;
-        let accessor_ops = input.parse_zero_or_more(Cursor::parse);
+        let Some(accessor_ops) = input
+            .parse_zero_or_more(Cursor::parse)
+            .into_iter()
+            .collect_one_or_more()
+        else {
+            return Accessor::Base(base).into();
+        };
 
-        Accessor(base, accessor_ops).into()
+        Accessor::Accessors(base, accessor_ops).into()
     }
 }
 
@@ -930,26 +1022,38 @@ impl Parse for AccessorOp {
 
 #[derive(Debug)]
 pub enum Base {
-    Literal(Literal),
-    Array(Vec<Expr>),
-    Grouping(Expr),
-    FuncCall(FuncCall),
+    Literal(Span<Literal>),
+    List(Span<Vec<Expr>>),
+    Grouping(Span<Expr>),
+    FuncCall(Span<FuncCall>),
+}
+
+impl GetPosition for Base {
+    fn get_line(&self) -> usize {
+        match self {
+            Base::Literal(span) => span.line,
+            Base::List(span) => span.line,
+            Base::Grouping(span) => span.line,
+            Base::FuncCall(span) => span.line,
+        }
+    }
 }
 
 impl Parse for Base {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
+        let line = input.peek()?.line;
         if let Some(func_call) = input.parse() {
-            return Base::FuncCall(func_call).into();
+            return Base::FuncCall(Span::new(func_call, line)).into();
         };
 
         if let Some(lit) = input.parse() {
-            return Base::Literal(lit).into();
+            return Base::Literal(Span::new(lit, line)).into();
         };
 
         if input.next_if_kind(&TokenKind::LeftBracket).is_some() {
             let Some(elem1) = input.parse() else {
                 input.expect_kind(&TokenKind::RightBracket, "Expected a closing `]`");
-                return Base::Array(vec![]).into();
+                return Base::List(Span::new(vec![], line)).into();
             };
 
             let mut elems = vec![elem1];
@@ -959,11 +1063,11 @@ impl Parse for Base {
             }));
 
             input.expect_kind(&TokenKind::RightBracket, "Expected a closing `]`");
-            return Base::Array(elems).into();
+            return Base::List(Span::new(elems, line)).into();
         };
 
         if input.next_if_kind(&TokenKind::LeftParen).is_some() {
-            let grouping = Base::Grouping(input.parse()?);
+            let grouping = Base::Grouping(Span::new(input.parse()?, line));
             input.expect_kind(&TokenKind::RightParen, "Expect closing `)`");
             return grouping.into();
         };
@@ -1002,19 +1106,31 @@ impl Parse for FuncCall {
     }
 }
 
-#[derive(Debug)]
-pub struct Identifier(String);
+#[derive(Debug, Eq, Hash, PartialEq, Clone)]
+pub struct Identifier {
+    pub name: String,
+    line: usize,
+}
 impl Parse for Identifier {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let Some(Token {
             kind: TokenKind::Identifier(name),
-            line: _,
+            line,
         }) = input.next()
         else {
             return None;
         };
 
-        Identifier(name.to_string()).into()
+        Identifier {
+            name: name.to_string(),
+            line: *line,
+        }
+        .into()
+    }
+}
+impl GetPosition for Identifier {
+    fn get_line(&self) -> usize {
+        self.line
     }
 }
 
@@ -1036,7 +1152,11 @@ impl Parse for Target {
             return Target::Accesor { base, accessors }.into();
         };
 
-        let Base::FuncCall(FuncCall::Identifier(iden)) = base else {
+        let Base::FuncCall(Span {
+            item: FuncCall::Identifier(iden),
+            line,
+        }) = base
+        else {
             return None;
         };
 

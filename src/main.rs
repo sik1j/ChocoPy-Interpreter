@@ -7,6 +7,7 @@ use std::{env, fs};
 mod compiler;
 mod parser;
 mod tokenizer;
+mod type_checker;
 mod virtual_machine;
 
 fn main() -> std::io::Result<()> {
