@@ -1,21 +1,29 @@
-use core::panic;
-use std::{collections::HashMap, fmt::Debug, ops::BitXor, rc::Rc};
+use std::borrow::Borrow;
+use std::hash::Hash;
+use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
 use crate::parser::{
-    Accessor, AccessorOp, AndOp, Base, ClassDef, Comparison, ComparisonOp, Definition, Expr,
-    Factor, FactorOp, FuncCall, GetPosition, Identifier, Literal, NegInt, NotOp, OneOrMore, OrOp,
-    Program, SimpleStatement, Span, Term, TermOp, Type as ParserType, TypedVar, VarDef,
+    self, Accessor, AccessorOp, AndOp, Base, ClassDef, Comparison, ComparisonOp, Definition, Expr,
+    Factor, FactorOp, FuncBody, FuncCall, FuncDef, GetPosition, Identifier, Literal, NegInt, NotOp,
+    OneOrMore, OrOp, Program, SimpleStatement, Span, Statement, Term, TermOp, TypedVar, VarDef,
 };
 
 #[derive(PartialEq, Clone, Debug)]
 enum Type {
-    I32,
+    Int,
     Bool,
     Str,
     None,
     Empty,
     List(Box<Type>),
-    Class(Class),
+    Class(Rc<ClassType>),
+    Function(FunctionType),
+}
+
+#[derive(PartialEq, Clone, Debug)]
+struct FunctionType {
+    params: Vec<(String, Type)>,
+    return_type: Box<Type>,
 }
 macro_rules! panic_line {
     ($line:expr, $msg:expr) => {
@@ -25,19 +33,23 @@ macro_rules! panic_line {
 
 impl Type {
     fn is_subtype(&self, super_type: &Type) -> bool {
-        match (self, super_type) {
+        let var_name = match (self, super_type) {
             (Type::Class(c1), Type::Class(c2)) => c1.is_subtype(c2),
-            (Type::None, Type::I32 | Type::Bool | Type::Str) => false,
+            (Type::None, Type::Int | Type::Bool | Type::Str) => false,
             (Type::None, _) => true,
             (Type::Empty, Type::List(_)) => true,
             (Type::List(t1), Type::List(t2)) => **t1 == Type::None && Type::None.is_subtype(t2),
             (t1, t2) => t1 == t2,
-        }
+        };
+        var_name
     }
 
-    fn subtype_or_panic(&self, super_type: &Type, line: usize, msg: &str) {
+    fn expect_subtype_of(&self, super_type: &Type, line: usize) {
         if !self.is_subtype(super_type) {
-            panic_line!(line, msg);
+            panic_line!(
+                line,
+                &format!("{:?} is not a subtype of {:?}", self, super_type)
+            );
         }
     }
 
@@ -50,15 +62,21 @@ impl Type {
         }
     }
 
+    fn expect_type(self, expected: &Type, line: usize) -> Self {
+        self.panic_if_mismatch(expected, line);
+        self
+    }
+
     fn join(&self, t: &Type) -> &Type {
         match t {
-            Type::I32 => todo!(),
+            Type::Int => todo!(),
             Type::Bool => todo!(),
             Type::Str => todo!(),
             Type::None => todo!(),
             Type::Empty => todo!(),
             Type::List(_) => todo!(),
             Type::Class(class) => todo!(),
+            Type::Function(..) => todo!(),
         }
     }
 
@@ -66,383 +84,504 @@ impl Type {
         panic_line!(line, &format!("{:?} is undefined for {:?}", self, name));
     }
 
-    fn check_binary_expr<T: Debug + std::cmp::PartialEq, U: TypecheckExpression>(
-        type_env: &mut TypeEnv,
-        line: usize,
-        expected_type: Type,
+    // fn binary_operations<OpType, ArgType>(&self, more: &[(OpType, ArgType)]) -> Type {
+    //     let (is_op_valid) = match self {
+    //         Type::Int => |op| op == TermOp::Add,
+    //         Type::Bool => todo!(),
+    //         Type::Str => todo!(),
+    //         Type::None => todo!(),
+    //         Type::Empty => todo!(),
+    //         Type::List(_) => todo!(),
+    //         Type::Class(class_type) => todo!(),
+    //         Type::Function => todo!(),
+    //     };
+
+    //     for (op, _) in more {
+    //         if !is_op_valid(op) {
+    //             panic!()
+    //         }
+    //     }
+
+    //     self.clone()
+    // }
+
+    fn check_binary_expr<'a, T, U>(
+        self,
         valid_ops: &[T],
-        rest_of_args: &Vec<(T, U)>,
-    ) -> Type {
-        for (op, to_check) in rest_of_args {
-            to_check
-                .check_expression(type_env)
-                .panic_if_mismatch(&expected_type, line);
+        rest_of_args: &'a Vec<(T, U)>,
+        line: usize,
+    ) -> Type
+    where
+        T: Debug + std::cmp::PartialEq,
+        U: 'a + GetPosition,
+        Type: From<&'a U>,
+    {
+        for (op, expr) in rest_of_args {
+            Type::from(expr).expect_type(&self, expr.get_line());
 
             if !valid_ops.contains(op) {
-                panic_line!(
-                    line,
-                    format!("{:?} is not defined for {:?}", op, expected_type)
-                )
+                panic_line!(line, format!("{:?} is not defined for {:?}", op, self))
             };
         }
 
-        expected_type
+        self
     }
+
+    // fn check_accesor_expression(
+    //     &self,
+    //     type_env: &mut TypeEnv,
+    //     one_or_more: &OneOrMore<AccessorOp>,
+    // ) -> Type {
+    //     match self {
+    //         Type::Str => one_or_more.iter().fold(Type::Str, |_, op| match op {
+    //             AccessorOp::Index(expr) => expr
+    //                 .check_expression(type_env)
+    //                 .expect_type(&Type::I32, expr.get_line()),
+
+    //             AccessorOp::MemberFunc(func_call) => {
+    //                 panic_line!(func_call.get_line(), "`str` doesn't implement `.`")
+    //             }
+    //         }),
+    //         _ => todo!(),
+    //     }
+    // }
 }
 
 #[derive(PartialEq, Clone, Debug)]
-enum Class {
+enum ClassType {
     Class {
         name: String,
-        super_class: Rc<Class>,
+        super_class: Rc<ClassType>,
     },
     Object,
 }
 
-impl Class {
-    fn is_subtype(&self, super_type: &Class) -> bool {
+impl ClassType {
+    fn is_subtype(&self, super_type: &ClassType) -> bool {
         let var_name = match (self, super_type) {
-            (_, Class::Object) => true,
-            (Class::Object, Class::Class { .. }) => false,
+            (_, ClassType::Object) => true,
+            (ClassType::Object, ClassType::Class { .. }) => false,
             (
-                Class::Class {
+                ClassType::Class {
                     name: _,
                     super_class: self_super,
                 },
-                b @ Class::Class { .. },
+                b @ ClassType::Class { .. },
             ) => **self_super == *b || self_super.is_subtype(b),
         };
         var_name
     }
 }
 
+struct LocalEnv {
+    scopes: Vec<HashMap<String, Rc<Type>>>,
+}
+
+impl LocalEnv {
+    fn new() -> LocalEnv {
+        LocalEnv {
+            scopes: vec![HashMap::new()],
+        }
+    }
+
+    fn insert(&mut self, name: String, typ: Rc<Type>) -> Option<Rc<Type>> {
+        self.scopes
+            .last_mut()
+            .expect("scopes should never be empty")
+            .insert(name, typ)
+    }
+
+    fn get<Q>(&self, name: &Q) -> Option<&Rc<Type>>
+    where
+        Q: Hash + Eq + ?Sized,
+        String: Borrow<Q>,
+    {
+        self.scopes
+            .last()
+            .expect("scopes should never be empty")
+            .get(name)
+    }
+
+    fn add_scope(&mut self, FunctionType { params, .. }: &FunctionType) {
+        self.scopes.push(HashMap::new());
+        for (name, typ) in params {
+            self.insert(name.clone(), typ.clone().into());
+        }
+    }
+
+    fn drop_scope(&mut self) {
+        self.scopes.pop();
+    }
+}
+
 struct TypeEnv {
-    local: HashMap<Identifier, Type>,
-    method_attr: HashMap<String, Type>,
-    class: Option<String>,
-    return_type: Option<String>,
+    local: LocalEnv,
+    method_attr: HashMap<String, Rc<Type>>,
+    class: Option<Type>,
+    return_type: Option<Type>,
 }
 
 impl TypeEnv {
-    fn new() -> TypeEnv {
+    fn new(program: &Program) -> TypeEnv {
+        for def in program.definitions {
+            /// collect top level functions and classes to foward-reference them
+            /// in top level local scope
+            match def {
+                Definition::FuncDef(FuncDef {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                }) => Type::Function(FunctionType {
+                    params: params
+                        .iter()
+                        .map(|param| (param.name.name.clone(), self.))
+                        .collect(),
+                    return_type,
+                }),
+                Definition::ClassDef(class_def) => todo!(),
+                Definition::VarDef(var_def) => continue,
+            }
+        }
+
         TypeEnv {
-            local: HashMap::new(),
+            local: LocalEnv::new(),
             method_attr: HashMap::new(),
             class: None,
             return_type: None,
         }
     }
 
-    fn get_local(&self, iden: &Identifier) -> Option<&Type> {
-        self.local.get(iden)
+    // fn var_read<'a>(&'a self, identifier: &Identifier) -> &'a Type {
+    //     let Identifier { name, line } = identifier;
+
+    //     let var_type = self.get_local(name).expect("msg");
+    //     if var_type == &Type::Function {
+    //         panic!();
+    //     };
+    //     var_type
+    // }
+
+    pub fn type_check_program<'a>(&mut self, program: &'a Program) {
+        let Program {
+            definitions,
+            statements,
+        } = program;
+
+        for def in definitions {
+            self.check_definition(def);
+        }
+
+        for stmt in statements {
+            self.check_stmt(stmt);
+        }
     }
-}
 
-trait TypecheckExpression {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type;
-}
+    fn var_assign_stmt<'a>(&'a self) {
+        todo!()
+    }
 
-impl TypecheckExpression for Literal {
-    fn check_expression(&self, _type_env: &mut TypeEnv) -> Type {
-        match self {
-            Literal::None => Type::None,
-            Literal::True | Literal::False => Type::Bool,
-            Literal::Integer(_) => Type::I32,
-            Literal::String(_) => Type::Str,
-            Literal::IdString(_) => todo!(),
+    fn check_definition(&mut self, definition: &Definition) {
+        match definition {
+            Definition::VarDef(var_def) => self.check_var_def(var_def),
+            Definition::FuncDef(func_def) => self.check_func_def(func_def),
+            Definition::ClassDef(class_def) => self.check_class_def(class_def),
+        }
+    }
+
+    fn check_var_def(&mut self, var_def: &VarDef) {
+        let VarDef {
+            typed_var:
+                TypedVar {
+                    r#type,
+                    name: Identifier { name, .. },
+                },
+            value,
+        } = var_def;
+
+        let defined_type = Type::from(r#type);
+        let value_type = Type::from(value);
+
+        value_type.expect_subtype_of(&defined_type, var_def.get_line());
+
+        self.local.insert(name.clone(), defined_type.into());
+    }
+
+    fn check_func_def(&mut self, func_def: &FuncDef) {
+        let FuncDef {
+            name,
+            params,
+            return_type,
+            func_body,
+        } = func_def;
+
+        let return_type = return_type.as_ref().map_or(Type::None, Type::from).into();
+        let params = params
+            .iter()
+            .map(|param| (param.name.name.clone(), Type::from(&param.r#type)))
+            .collect();
+
+        let func_type = FunctionType {
+            params,
+            return_type,
+        };
+        self.check_func_body(&func_type, func_body);
+
+        self.local
+            .insert(name.name.clone(), Type::Function(func_type).into());
+    }
+
+    fn check_func_body(&mut self, func_type: &FunctionType, func_body: &FuncBody) {
+        self.local.add_scope(func_type);
+
+        todo!();
+
+        self.local.drop_scope();
+    }
+
+    fn check_class_def(&mut self, class_def: &ClassDef) {
+        let ClassDef {
+            name,
+            super_class,
+            body,
+        } = class_def;
+
+        if name.name == "object" {
+            panic!("class cannot be named object");
+        }
+
+        let super_class = match &**self
+            .local
+            .get(&super_class.name)
+            .expect("Expected a superclass")
+        {
+            Type::Class(class) => class.clone(),
+            _ => panic!("{:?} is not a class type", &super_class.name),
+        };
+
+        todo!()
+        // let class_type = ClassType::Class { name: (), super_class: () }
+    }
+
+    fn check_simple_stmt(&self, simple_statement: &SimpleStatement) {
+        match simple_statement {
+            SimpleStatement::Pass => (),
+            SimpleStatement::Expr(expr) => {
+                let _ = Type::from(expr);
+            }
+            SimpleStatement::Return(expr) => todo!(),
+            SimpleStatement::Assignments { targets, expr } => todo!(),
+        }
+    }
+
+    fn check_stmt(&self, statement: &Statement) {
+        match statement {
+            Statement::Simple(simple_statement) => self.check_simple_stmt(simple_statement),
+            Statement::IfStmt(if_stmt) => todo!(),
+            Statement::WhileLoop { condition, body } => todo!(),
+            Statement::ForLoop {
+                item,
+                iterator,
+                body,
+            } => todo!(),
+        }
+    }
+
+    fn convert_parser_type(&self, parser_type: parser::Type) -> Rc<Type> {
+        match parser_type {
+            parser::Type::Identifier(identifier) => match identifier.name.as_str() {
+                "int" => Rc::new(Type::Int),
+                "bool" => Rc::new(Type::Bool),
+                "str" => Rc::new(Type::Str),
+                class_name => self
+                    .local
+                    .get(class_name)
+                    .expect(&format!("Undefined class: {:?}", class_name))
+                    .clone(),
+            },
+            parser::Type::IdString(_) => todo!(),
+            parser::Type::Array(_) => todo!(),
         }
     }
 }
 
-impl TypecheckExpression for Accessor {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        match self {
-            Accessor::Base(base) => base.check_expression(type_env),
-            Accessor::Accessors(base, one_or_more)
-                if base.check_expression(type_env) == Type::Str =>
-            {
-                let expected = Type::Str;
-                for op in one_or_more.iter() {
-                    match op {
-                        AccessorOp::Index(expr) => expr
-                            .check_expression(type_env)
-                            .panic_if_mismatch(&expected, self.get_line()),
-                        AccessorOp::MemberFunc(func_call) => panic_line!(
-                            self.get_line(),
-                            "Type `Str` does not support `.` operations"
-                        ),
-                    }
-                }
+impl From<&parser::Type> for Type {
+    fn from(value: &parser::Type) -> Self {
+        todo!()
+    }
+}
+
+impl From<&Expr> for Type {
+    fn from(value: &Expr) -> Self {
+        let Expr { or_op, if_expr } = value;
+        let Some((if_cond, else_expr)) = if_expr else {
+            return Type::from(or_op);
+        };
+
+        Type::from(if_cond).expect_type(&Type::Bool, value.get_line());
+
+        let t1 = Type::from(or_op);
+        let t2 = Type::from(&**else_expr);
+
+        t1.join(&t2).clone()
+    }
+}
+
+impl From<&OrOp> for Type {
+    fn from(value: &OrOp) -> Self {
+        let OrOp(one, more) = value;
+        if more.is_empty() {
+            return Type::from(&**one);
+        };
+
+        let line = value.get_line();
+        let expected = Type::Bool;
+        Type::from(&**one).expect_type(&expected, line);
+        for right in more {
+            Type::from(right).expect_type(&expected, line);
+        }
+
+        expected
+    }
+}
+
+impl From<&AndOp> for Type {
+    fn from(value: &AndOp) -> Self {
+        let AndOp(one, more) = value;
+        if more.is_empty() {
+            return Type::from(one);
+        };
+
+        let line = value.get_line();
+        let expected = Type::Bool;
+        Type::from(one).expect_type(&expected, line);
+        for right in more {
+            Type::from(right).expect_type(&expected, line);
+        }
+
+        expected
+    }
+}
+
+impl From<&NotOp> for Type {
+    fn from(value: &NotOp) -> Self {
+        let NotOp {
+            op_count,
+            comparison,
+        } = value;
+        if *op_count == 0 {
+            return Type::from(comparison);
+        };
+
+        Type::from(comparison).expect_type(&Type::Bool, value.get_line())
+    }
+}
+
+impl From<&Comparison> for Type {
+    fn from(value: &Comparison) -> Self {
+        let Comparison(one, more) = value;
+
+        let line = value.get_line();
+        match more.len() {
+            0 => Type::from(one),
+            1 => {
+                let expected = Type::Bool;
+                let _ = Type::from(one).expect_type(&expected, line);
+                let _ = Type::from(&more[0].1).expect_type(&expected, line);
 
                 expected
             }
+            _ => panic_line!(line, "Cannot chain comparison operations"),
+        }
+    }
+}
+
+impl From<&Term> for Type {
+    fn from(value: &Term) -> Self {
+        let Term(one, more) = value;
+
+        if more.is_empty() {
+            return Type::from(one);
+        };
+
+        let line = value.get_line();
+        match Type::from(&more[0].1) {
+            Type::Int => Type::Int.check_binary_expr(&[TermOp::Add, TermOp::Subtract], more, line),
+            Type::Bool => todo!(),
+            Type::Str => Type::Str.check_binary_expr(&[TermOp::Add], more, line),
+            Type::None => todo!(),
+            Type::Empty => todo!(),
+            Type::List(_) => todo!(),
+            Type::Class(rc) => todo!(),
+            Type::Function(function_type) => todo!(),
+        }
+    }
+}
+
+impl From<&Factor> for Type {
+    fn from(value: &Factor) -> Self {
+        let Factor(one, more) = value;
+
+        if more.is_empty() {
+            return Type::from(one);
+        };
+
+        let line = value.get_line();
+        match Type::from(&more[0].1) {
+            Type::Int => Type::Int.check_binary_expr(
+                &[FactorOp::Multiply, FactorOp::IntDiv, FactorOp::Modulo],
+                more,
+                line,
+            ),
             _ => todo!(),
         }
     }
 }
 
-impl TypecheckExpression for NegInt {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        if self.op_count == 0 {
-            return self.accessor.check_expression(type_env);
-        }
-
-        let expected = Type::I32;
-        self.accessor
-            .check_expression(type_env)
-            .panic_if_mismatch(&expected, self.get_line());
-
-        expected
-    }
-}
-
-impl TypecheckExpression for Factor {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let Factor(first, rest) = self;
-        if rest.is_empty() {
-            return first.check_expression(type_env);
-        }
-
-        let expected = Type::I32;
-        Type::check_binary_expr(
-            type_env,
-            self.get_line(),
-            expected,
-            &[FactorOp::Multiply, FactorOp::IntDiv, FactorOp::Modulo],
-            rest,
-        )
-    }
-}
-
-impl TypecheckExpression for Term {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let Self(first, rest) = self;
-        if rest.is_empty() {
-            return first.check_expression(type_env);
-        }
-
-        match first.check_expression(type_env) {
-            Type::I32 => Type::check_binary_expr(
-                type_env,
-                self.get_line(),
-                Type::I32,
-                &[TermOp::Add, TermOp::Subtract],
-                rest,
-            ),
-            Type::Bool => todo!(),
-            Type::Str => {
-                Type::check_binary_expr(type_env, self.get_line(), Type::Str, &[TermOp::Add], rest)
-            }
-
-            Type::None => todo!(),
-            Type::Empty => todo!(),
-            Type::List(_) => todo!(),
-            Type::Class(class) => todo!(),
-        }
-    }
-}
-
-impl TypecheckExpression for Comparison {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let Self(first, rest) = self;
-        if rest.is_empty() {
-            return first.check_expression(type_env);
-        }
-
-        let line = self.get_line();
-        match first.check_expression(type_env) {
-            Type::I32 => Type::check_binary_expr(
-                type_env,
-                line,
-                Type::I32,
-                &[
-                    ComparisonOp::Equal,
-                    ComparisonOp::NotEqual,
-                    ComparisonOp::Less,
-                    ComparisonOp::LessEqual,
-                    ComparisonOp::Greater,
-                    ComparisonOp::GreaterEqual,
-                ],
-                rest,
-            ),
-            ty @ (Type::Bool | Type::Str) => Type::check_binary_expr(
-                type_env,
-                line,
-                ty,
-                &[ComparisonOp::Equal, ComparisonOp::NotEqual],
-                rest,
-            ),
-
-            t => panic_line!(
-                self.get_line(),
-                format!("{:?} is undefined for {:?}", rest[0].0, t)
-            ),
-        }
-    }
-}
-
-impl TypecheckExpression for NotOp {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        if self.op_count == 0 {
-            return self.comparison.check_expression(type_env);
-        }
-
-        let expected = Type::Bool;
-        self.comparison
-            .check_expression(type_env)
-            .panic_if_mismatch(&expected, self.get_line());
-
-        expected
-    }
-}
-
-impl TypecheckExpression for AndOp {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let Self(first, rest) = self;
-        if rest.is_empty() {
-            return first.check_expression(type_env);
-        }
-
-        let expected = Type::Bool;
-        first
-            .check_expression(type_env)
-            .panic_if_mismatch(&expected, self.get_line());
-
-        for expr in rest {
-            expr.check_expression(type_env)
-                .panic_if_mismatch(&expected, self.get_line());
-        }
-
-        expected
-    }
-}
-
-impl TypecheckExpression for OrOp {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let Self(first, rest) = self;
-        if rest.is_empty() {
-            return first.check_expression(type_env);
-        }
-
-        let expected = Type::Bool;
-        first
-            .check_expression(type_env)
-            .panic_if_mismatch(&expected, self.get_line());
-
-        for expr in rest {
-            expr.check_expression(type_env)
-                .panic_if_mismatch(&expected, self.get_line());
-        }
-
-        expected
-    }
-}
-
-impl TypecheckExpression for Expr {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        let type1 = self.or_op.check_expression(type_env);
-
-        let Some((condition, else_expr)) = &self.if_expr else {
-            return type1;
+impl From<&NegInt> for Type {
+    fn from(value: &NegInt) -> Self {
+        let NegInt { op_count, accessor } = value;
+        if *op_count == 0 {
+            return Type::from(accessor);
         };
 
-        condition
-            .check_expression(type_env)
-            .panic_if_mismatch(&Type::Bool, self.get_line());
-
-        let type2 = else_expr.check_expression(type_env);
-        // join(e1, e2)
-        todo!()
+        Type::from(accessor).expect_type(&Type::Int, value.get_line())
     }
 }
 
-impl TypecheckExpression for Base {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        match self {
-            Base::Literal(Span { item: literal, .. }) => todo!(),
-            Base::List(span) => span.check_expression(type_env),
-            Base::Grouping(expr) => todo!(),
-            Base::FuncCall(func_call) => todo!(),
+impl From<&Accessor> for Type {
+    fn from(value: &Accessor) -> Self {
+        match value {
+            Accessor::Base(base) => Type::from(base),
+            Accessor::Accessors(base, one_or_more) => todo!(),
         }
     }
 }
 
-impl TypecheckExpression for Span<Vec<Expr>> {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        if self.item.is_empty() {
-            return Type::Empty;
-        };
-
-        self.item
-            .iter()
-            .map(|e| e.check_expression(type_env))
-            .reduce(|acc, e| e.join(&acc).clone())
-            .unwrap()
-            .clone()
-    }
-}
-
-impl TypecheckExpression for FuncCall {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        match self {
-            FuncCall::FuncCall { name, args } => todo!(),
-            FuncCall::Identifier(identifier) => type_env
-                .local
-                .get(identifier)
-                .expect(&format!(
-                    "[Line: {}] Missing Variable Definition",
-                    identifier.get_line()
-                ))
-                .clone(),
+impl From<&Base> for Type {
+    fn from(value: &Base) -> Self {
+        match value {
+            Base::Literal(span) => Type::from(&span.item),
+            Base::List(span) => span
+                .item
+                .iter()
+                .map(Type::from)
+                .reduce(|acc, typ| acc.join(&typ).clone())
+                .unwrap_or(Type::Empty),
+            Base::Grouping(span) => Type::from(&span.item),
+            Base::FuncCall(span) => todo!(),
         }
     }
 }
 
-impl TypecheckExpression for ParserType {
-    fn check_expression(&self, type_env: &mut TypeEnv) -> Type {
-        match self {
-            ParserType::Identifier(identifier) => todo!(),
-            ParserType::IdString(_) => todo!(),
-            ParserType::Array(_) => todo!(),
+impl From<&Literal> for Type {
+    fn from(value: &Literal) -> Self {
+        match value {
+            Literal::None => Type::None,
+            Literal::True | Literal::False => Type::Bool,
+            Literal::Integer(_) => Type::Int,
+            Literal::String(_) => Type::Str,
+            Literal::IdString(_) => todo!(),
         }
-    }
-}
-
-trait TypecheckStatement {
-    fn check_statement(&self, type_env: &mut TypeEnv);
-}
-
-impl TypecheckStatement for VarDef {
-    fn check_statement(&self, type_env: &mut TypeEnv) {
-        let VarDef {
-            typed_var: TypedVar { name, r#type },
-            value,
-        } = self;
-
-        let given_type = r#type.check_expression(type_env);
-        let literal_type = value.check_expression(type_env);
-
-        literal_type.subtype_or_panic(
-            &given_type,
-            self.get_line(),
-            "Cannot assign {literal_type:?} to {given_type:?}",
-        );
-
-        type_env.local.insert(name.clone(), given_type);
-    }
-}
-
-impl TypecheckStatement for SimpleStatement {
-    fn check_statement(&self, type_env: &mut TypeEnv) {
-        match self {
-            SimpleStatement::Pass => (),
-            SimpleStatement::Expr(expr) => {
-                expr.check_expression(type_env);
-            }
-            SimpleStatement::Return(expr) => todo!(),
-            SimpleStatement::Assignments { targets, expr } => {
-                let OneOrMore { one, more } = targets;
-            }
-        };
     }
 }

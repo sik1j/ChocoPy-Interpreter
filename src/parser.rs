@@ -94,7 +94,7 @@ macro_rules! expr_tuple_impl_get_pos {
     };
 }
 
-expr_tuple_impl_get_pos!(OrOp, AndOp, Comparison, Term, Factor, Accessor);
+expr_tuple_impl_get_pos!(OrOp, AndOp, Comparison, Term, Factor);
 
 impl GetPosition for NotOp {
     fn get_line(&self) -> usize {
@@ -327,9 +327,9 @@ impl Parse for Definition {
 
 #[derive(Debug)]
 pub struct ClassDef {
-    name: Identifier,
-    super_class: Identifier,
-    body: ClassBody,
+    pub name: Identifier,
+    pub super_class: Identifier,
+    pub body: ClassBody,
 }
 
 impl Parse for ClassDef {
@@ -392,10 +392,10 @@ impl Parse for DefinitionInClass {
 
 #[derive(Debug)]
 pub struct FuncDef {
-    name: Identifier,
-    params: Vec<TypedVar>,
-    return_type: Option<Type>,
-    func_body: FuncBody,
+    pub name: Identifier,
+    pub params: Vec<TypedVar>,
+    pub return_type: Option<Type>,
+    pub func_body: FuncBody,
 }
 
 impl Parse for FuncDef {
@@ -440,8 +440,8 @@ impl Parse for FuncDef {
 
 #[derive(Debug)]
 pub struct FuncBody {
-    declarations: Vec<Declaration>,
-    statements: OneOrMore<Statement>,
+    pub declarations: Vec<Declaration>,
+    pub statements: OneOrMore<Statement>,
 }
 
 impl Parse for FuncBody {
@@ -982,7 +982,14 @@ pub enum Accessor {
     Base(Base),
     Accessors(Base, OneOrMore<AccessorOp>),
 }
-
+impl GetPosition for Accessor {
+    fn get_line(&self) -> usize {
+        match self {
+            Accessor::Base(base) => base.get_line(),
+            Accessor::Accessors(base, ..) => base.get_line(),
+        }
+    }
+}
 impl Parse for Accessor {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
         let base = input.parse()?;
@@ -1002,6 +1009,14 @@ impl Parse for Accessor {
 pub enum AccessorOp {
     Index(Expr),
     MemberFunc(FuncCall),
+}
+impl GetPosition for AccessorOp {
+    fn get_line(&self) -> usize {
+        match self {
+            AccessorOp::Index(expr) => expr.get_line(),
+            AccessorOp::MemberFunc(func_call) => func_call.get_line(),
+        }
+    }
 }
 impl Parse for AccessorOp {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
@@ -1081,6 +1096,14 @@ pub enum FuncCall {
     FuncCall { name: Identifier, args: Vec<Expr> },
     Identifier(Identifier),
 }
+impl GetPosition for FuncCall {
+    fn get_line(&self) -> usize {
+        match self {
+            FuncCall::FuncCall { name, .. } => name.get_line(),
+            FuncCall::Identifier(identifier) => identifier.get_line(),
+        }
+    }
+}
 
 impl Parse for FuncCall {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
@@ -1109,7 +1132,7 @@ impl Parse for FuncCall {
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct Identifier {
     pub name: String,
-    line: usize,
+    pub line: usize,
 }
 impl Parse for Identifier {
     fn parse(input: &mut Cursor<Token>) -> Option<Self> {
